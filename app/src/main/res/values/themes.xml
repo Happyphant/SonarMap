@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App-level strings; UI text lives in composables where appropriate -->
+    <string name="app_name">SonarMap</string>
+
+    <style name="Theme.SonarMap" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
