@@ -95,10 +95,10 @@ class YandexMapProvider : MapProvider {
             mapView.mapWindow.map.move(cameraPosition(TEST_USER_LOCATION, INITIAL_ZOOM))
         }
 
-        // "My location" button: fly the camera to the requested position.
-        LaunchedEffect(state.userLocation) {
-            state.userLocation?.let { location ->
-                mapView.mapWindow.map.move(cameraPosition(location, MY_LOCATION_ZOOM))
+        // One-shot camera flight; the dot itself moves without camera reaction.
+        LaunchedEffect(state.cameraTarget) {
+            state.cameraTarget?.let { target ->
+                mapView.mapWindow.map.move(cameraPosition(target, MY_LOCATION_ZOOM))
             }
         }
 
@@ -135,8 +135,8 @@ class YandexMapProvider : MapProvider {
                 placemark.setIcon(pinIcon)
                 placemark.addTapListener(pinTapRef)
             }
-            // Yandex user location: a small dot placemark (CircleMapObject styling
-            // is intentionally avoided at this stage to keep the adapter minimal).
+            // Real user dot from the location layer (FusedLocationRepository);
+            // rendering unchanged since the static-test-point stage.
             state.userLocation?.let { location ->
                 mapObjects.addPlacemark(location.toYandexPoint()).setIcon(userDotIcon)
             }

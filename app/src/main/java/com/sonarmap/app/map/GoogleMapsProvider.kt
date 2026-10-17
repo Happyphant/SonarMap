@@ -39,11 +39,11 @@ class GoogleMapsProvider : MapProvider {
             position = CameraPosition.fromLatLngZoom(TEST_USER_LOCATION.toLatLng(), 13f)
         }
 
-        // One-shot camera flight to the requested position (My location button).
-        LaunchedEffect(state.userLocation) {
-            state.userLocation?.let { location ->
+        // One-shot camera flight; the dot itself moves without camera reaction.
+        LaunchedEffect(state.cameraTarget) {
+            state.cameraTarget?.let { target ->
                 cameraPositionState.animate(
-                    CameraUpdateFactory.newLatLngZoom(location.toLatLng(), 16f),
+                    CameraUpdateFactory.newLatLngZoom(target.toLatLng(), 16f),
                 )
             }
         }

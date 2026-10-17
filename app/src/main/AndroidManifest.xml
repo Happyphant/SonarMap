@@ -4,7 +4,10 @@
     <!-- MapKit and Google Maps both load tiles over network. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- No location permission yet: "My location" uses a fixed test point. -->
+    <!-- Real user positioning. Runtime request happens at the FAB tap,
+         never at startup. No background location / foreground service. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
         android:name=".SonarMapApplication"

@@ -86,6 +86,9 @@ dependencies {
     implementation(libs.play.services.maps)
     implementation(libs.maps.compose)
 
+    // Location: only the location package may use this.
+    implementation(libs.play.services.location)
+
     // Debug tooling for previews
     debugImplementation(libs.androidx.compose.ui.tooling)
 

@@ -14,8 +14,14 @@ data class MapMarkerUi(
 /** Everything the map layer renders; provider implementations must honor it. */
 data class MapUiState(
     val markers: List<MapMarkerUi> = emptyList(),
-    /** Null when the user has not requested a position fix yet. */
+    /** Raw user dot on the map; null until the first fix. Updates silently —
+     *  no camera reaction, so smoothed fix jitter never yanks the viewport. */
     val userLocation: GeoPoint? = null,
+    /**
+     * One-shot camera flight request ("Моё местоположение"): adapters move
+     * once per change and never on plain updates. Null = no request.
+     */
+    val cameraTarget: GeoPoint? = null,
 )
 
 /**

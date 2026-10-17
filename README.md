@@ -16,16 +16,21 @@ Implemented:
   engine (no FMOD/Resonance), SAF-picked files, volume slider wired live,
   default gain 0.7, audio focus handled, resources freed on screen exit
 - In-memory pin storage (ViewModel + Repository); Room comes later
-- "My location" button using a fixed test point (no geolocation yet)
+- Real user geolocation via `LocationRepository`: FusedLocationProviderClient
+  (while-in-use, no foreground service, no background usage), runtime
+  ACCESS_FINE/COARSE_LOCATION requested only from the "My location" FAB;
+  denied / permanently-denied / location-disabled / no-fix states surfaced
+  as snackbars; coordinates smoothed by a per-coordinate Kalman filter
+  before rendering; live "distance to pin" in the editor sheet
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
 - Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
   `com.yandex.android:maps.mobile` (lite), play-services-maps + maps-compose
-  (adapters only)
+  (adapters only), play-services-location (location layer only)
 
 Intentionally deferred (do not add here):
-- Real geolocation / foreground service (`location` package)
+- Foreground service / background location (updates live only while the
+  map screen is visible)
 - Route rendering and route segments on the map
-- Audio engine / spatial audio (`audio` package)
 - Persistence / Room (`data` package)
 
 ## Package layout

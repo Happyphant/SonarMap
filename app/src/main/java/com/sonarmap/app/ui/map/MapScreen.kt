@@ -1,11 +1,18 @@
 package com.sonarmap.app.ui.map
 
+import android.Manifest
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +31,10 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -33,10 +44,15 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sonarmap.app.audio.MediaPlayerAudioEngine
@@ -46,19 +62,32 @@ import com.sonarmap.app.domain.audio.AudioErrorKind
 import com.sonarmap.app.domain.audio.AudioPlaybackState
 import com.sonarmap.app.domain.model.GeoPoint
 import com.sonarmap.app.domain.model.MusicPin
+import com.sonarmap.app.location.LocationRepositoryProvider
 import com.sonarmap.app.map.MapCallbacks
 import com.sonarmap.app.map.MapProviders
 import com.sonarmap.app.map.MapUiState
+import kotlinx.coroutines.launch
 
 @Composable
-fun MapScreen(
-    viewModel: MapViewModel = viewModel {
-        MapViewModel(MusicPinRepositoryProvider.repository)
-    },
-) {
+fun MapScreen() {
+    // Application context — the repository itself is a process-wide singleton.
+    val context = LocalContext.current
+    val viewModel = viewModel {
+        MapViewModel(
+            repository = MusicPinRepositoryProvider.repository,
+            locationRepository = LocationRepositoryProvider.repository(context.applicationContext),
+        )
+    }
+    MapScreenContent(viewModel = viewModel)
+}
+
+@Composable
+private fun MapScreenContent(viewModel: MapViewModel) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val mapProvider = remember { MapProviders.default }
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // Local preview playback lives with the screen; released on exit (also
     // across configuration changes — DisposableEffect disposes the remembered
@@ -99,6 +128,88 @@ fun MapScreen(
         }
     }
 
+    // --- location permission (requested only from the FAB tap) ---------------
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { result ->
+        val anyGranted = result.values.any { it }
+        if (anyGranted) {
+            viewModel.onMyLocationClick()
+        } else {
+            // Manifest-level "don't ask again" : after the double denial the
+            // rationale callback returns false — only app settings remain.
+            val activity = context.findActivity()
+            val permanent = activity.let { a ->
+                a != null &&
+                    !ActivityCompat.shouldShowRequestPermissionRationale(
+                        a,
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                    ) &&
+                    !ActivityCompat.shouldShowRequestPermissionRationale(
+                        a,
+                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                    )
+            }
+            viewModel.onLocationPermissionDenied(permanent)
+        }
+    }
+
+    // No updates while backgrounded: subscriber must be STARTED to collect.
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> viewModel.startLocationTracking()
+                Lifecycle.Event.ON_STOP -> viewModel.stopLocationTracking()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val (noticeText, noticeAction) = state.locationNotice?.let { notice ->
+        val (text, action) = when (notice) {
+            LocationNotice.PermissionDenied ->
+                "Доступ к геолокации не выдан. Нажмите «Моё местоположение» ещё раз" to null
+
+            LocationNotice.PermissionPermanentlyDenied ->
+                "Доступ закрыт — включите геолокацию в настройках приложения" to "Настройки"
+
+            LocationNotice.ProviderDisabled ->
+                "Геолокация выключена на устройстве" to "Включить"
+
+            LocationNotice.WaitingForFix ->
+                "Ждём сигнал GPS…" to null
+        }
+        text to action
+    } ?: (null as String?) to (null as String?)
+
+    LaunchedEffect(noticeText) {
+        // An Indefinite snackbar never finishes on its own: dismiss whatever
+        // is on screen so the queued notice (or a clearing) can proceed.
+        snackbarHostState.currentSnackbarData?.dismiss()
+        if (noticeText == null) {
+            return@LaunchedEffect
+        }
+        val result = snackbarHostState.showSnackbar(
+            message = noticeText,
+            actionLabel = noticeAction,
+            duration = SnackbarDuration.Indefinite,
+        )
+        if (result == SnackbarResult.ActionPerformed) {
+            when (state.locationNotice) {
+                LocationNotice.PermissionPermanentlyDenied ->
+                    context.openAppDetailsSettings()
+
+                LocationNotice.ProviderDisabled ->
+                    context.openLocationSourceSettings()
+
+                else -> Unit
+            }
+        }
+    }
+
     val callbacks = remember(viewModel) {
         object : MapCallbacks {
             override fun onMapLongClick(position: GeoPoint) = viewModel.addPin(position)
@@ -112,13 +223,34 @@ fun MapScreen(
             state = MapUiState(
                 markers = state.markers,
                 userLocation = state.userLocation,
+                cameraTarget = state.cameraTarget,
             ),
             callbacks = callbacks,
             modifier = Modifier.fillMaxSize(),
         )
 
         FloatingActionButton(
-            onClick = viewModel::onMyLocationClick,
+            onClick = {
+                val granted = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                ) == PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                    ) == PackageManager.PERMISSION_GRANTED
+                if (granted) {
+                    viewModel.onMyLocationClick()
+                } else {
+                    // Point-of-use request: never asked at app startup.
+                    locationPermissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION,
+                        ),
+                    )
+                }
+            },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 // Bottom padding keeps the FAB above the map's zoom controls
@@ -130,6 +262,13 @@ fun MapScreen(
                 contentDescription = "Моё местоположение",
             )
         }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 96.dp),
+        )
     }
 
     state.selectedPin?.let { pin ->
@@ -141,6 +280,7 @@ fun MapScreen(
         PinEditorSheet(
             pin = pin,
             fileName = remember(pin.audioAssetUri) { audioFileName(context, pin.audioAssetUri) },
+            distanceToPin = state.distanceToSelectedPin,
             onDismiss = viewModel::closePinEditor,
             onRename = viewModel::renamePin,
             onGainChange = { gain ->
@@ -171,6 +311,7 @@ fun MapScreen(
 private fun PinEditorSheet(
     pin: MusicPin,
     fileName: String,
+    distanceToPin: Double?,
     hasAudioFile: Boolean,
     playbackState: AudioPlaybackState,
     playbackError: AudioErrorKind?,
@@ -189,6 +330,11 @@ private fun PinEditorSheet(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("Метка", style = MaterialTheme.typography.titleMedium)
+
+            Text(
+                text = "До метки: ${formatDistance(distanceToPin)}",
+                style = MaterialTheme.typography.bodyMedium,
+            )
 
             OutlinedTextField(
                 value = pin.title,
@@ -287,3 +433,32 @@ private fun audioFileName(context: Context, uriString: String): String {
     }.getOrNull()
     return fromResolver ?: uri.lastPathSegment ?: uriString
 }
+
+/** Meters under a kilometer, kilometers with one decimal; unknown otherwise. */
+private fun formatDistance(distanceMeters: Double?): String = when {
+    distanceMeters == null -> "неизвестно (нет фикса)"
+    distanceMeters < 1_000.0 -> "%.0f м".format(distanceMeters)
+    else -> "%.1f км".format(distanceMeters / 1_000.0)
+}
+
+private fun Context.openAppDetailsSettings() {
+    val intent = Intent(
+        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        Uri.fromParts("package", packageName, null),
+    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    runCatching { startActivity(intent) }
+}
+
+private fun Context.openLocationSourceSettings() {
+    val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    runCatching { startActivity(intent) }
+}
+
+/** Unwrapping to the hosting Activity for the rationale check; null in tools. */
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
