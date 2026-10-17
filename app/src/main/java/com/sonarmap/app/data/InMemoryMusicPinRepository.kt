@@ -29,7 +29,7 @@ class InMemoryMusicPinRepository : MusicPinRepository {
                 position = position,
                 title = defaultTitle.ifBlank { "Пин ${_pins.value.size + 1}" },
                 audioAssetUri = "", // attached later from the editor sheet
-                gain = 1.0,
+                gain = MusicPin.DEFAULT_PIN_GAIN,
                 createdAt = System.currentTimeMillis(),
             )
             _pins.value += pin

@@ -1,6 +1,7 @@
 package com.sonarmap.app.data
 
 import com.sonarmap.app.domain.model.GeoPoint
+import com.sonarmap.app.domain.model.MusicPin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -20,7 +21,7 @@ class InMemoryMusicPinRepositoryTest {
         val pin = repo.addPin(moscow, defaultTitle = "")
 
         assertTrue(pin.id.isNotBlank())
-        assertEquals(1.0, pin.gain, 1e-12)
+        assertEquals(MusicPin.DEFAULT_PIN_GAIN, pin.gain, 1e-12)
         assertEquals("", pin.audioAssetUri)
         assertEquals("Пин 1", pin.title) // blank default title -> auto-named
         assertEquals(listOf(pin), repo.pins.first())

@@ -12,6 +12,9 @@ Implemented:
   **Yandex MapKit (default)** and Google Maps Compose (optional)
 - Long-press to place a MusicPin; marker tap opens editor bottom sheet
   (title, audio file picker, gain slider, delete)
+- Local audio preview via the `AudioEngine` boundary: MediaPlayer-backed
+  engine (no FMOD/Resonance), SAF-picked files, volume slider wired live,
+  default gain 0.7, audio focus handled, resources freed on screen exit
 - In-memory pin storage (ViewModel + Repository); Room comes later
 - "My location" button using a fixed test point (no geolocation yet)
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested

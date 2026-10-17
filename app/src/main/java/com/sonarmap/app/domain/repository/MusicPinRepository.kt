@@ -14,7 +14,8 @@ interface MusicPinRepository {
     val pins: StateFlow<List<MusicPin>>
 
     /**
-     * Creates a pin with a generated id, default full gain and no audio yet.
+     * Creates a pin with a generated id, [com.sonarmap.app.domain.model.MusicPin.DEFAULT_PIN_GAIN]
+     * gain (0.7) and no audio yet.
      * @param defaultTitle used when the caller has nothing better (UI supplies "Пин N")
      */
     suspend fun addPin(position: GeoPoint, defaultTitle: String): MusicPin

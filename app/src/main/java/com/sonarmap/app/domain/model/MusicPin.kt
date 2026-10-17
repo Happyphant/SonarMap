@@ -24,4 +24,9 @@ data class MusicPin(
         require(title.isNotBlank()) { "title must not be blank" }
         require(gain >= 0.0) { "gain $gain must be non-negative" }
     }
+
+    companion object {
+        /** Playback loudness for freshly created pins (70%). */
+        const val DEFAULT_PIN_GAIN = 0.7
+    }
 }
