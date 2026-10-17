@@ -12,3 +12,4 @@ captures/
 # Local config
 local.properties
 .DS_Store
+.kotlin/

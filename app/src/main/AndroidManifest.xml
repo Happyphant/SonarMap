@@ -1,11 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- No location permission yet: "My location" uses a fixed test point. -->
+
     <application
         android:allowBackup="false"
         android:label="SonarMap"
         android:supportsRtl="true"
         android:theme="@style/Theme.SonarMap">
+
+        <!-- Google Maps runtime key; substituted at build time from local.properties -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="${mapsApiKey}" />
 
         <activity
             android:name=".MainActivity"

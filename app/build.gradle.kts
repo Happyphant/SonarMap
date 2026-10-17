@@ -1,8 +1,17 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+// Google Maps API key comes from local.properties (gitignored): MAPS_API_KEY=...
+// Never commit the real key; a placeholder keeps the manifest resolvable on CI.
+val mapsApiKey: String = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}.getProperty("MAPS_API_KEY") ?: "MISSING_MAPS_API_KEY"
 
 android {
     namespace = "com.sonarmap.app"
@@ -15,6 +24,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        manifestPlaceholders["mapsApiKey"] = mapsApiKey
     }
 
     buildTypes {
@@ -62,6 +72,14 @@ dependencies {
     // Coroutines / Flow
     implementation(libs.kotlinx.coroutines.android)
 
+    // Maps: only the adapter (map package) may use these
+    implementation(libs.play.services.maps)
+    implementation(libs.maps.compose)
+
     // Debug tooling for previews
     debugImplementation(libs.androidx.compose.ui.tooling)
+
+    // Pure JVM unit tests for the domain layer (no Android mockable classes needed)
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

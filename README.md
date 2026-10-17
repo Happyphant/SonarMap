@@ -7,14 +7,20 @@ Gradle Kotlin DSL, version catalog.
 
 Implemented:
 - App module `app` with package `com.sonarmap.app`
-- Single-Activity Compose app, placeholder screen with "SonarMap" text
-- Navigation Compose host with one destination
-- Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow
+- Single-Activity Compose app
+- Map screen via `MapProvider` abstraction + Google Maps Compose adapter
+- Long-press to place a MusicPin; marker tap opens editor bottom sheet
+  (title, audio file picker, gain slider, delete)
+- In-memory pin storage (ViewModel + Repository); Room comes later
+- "My location" button using a fixed test point (no geolocation yet)
+- Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
+- Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
+  play-services-maps + maps-compose (adapter-only)
 
 Intentionally deferred (do not add here):
-- Map provider integration (`map` package)
+- Real geolocation / foreground service (`location` package)
+- Route rendering and route segments on the map
 - Audio engine / spatial audio (`audio` package)
-- FusedLocationProvider / foreground services (`location` package)
 - Persistence / Room (`data` package)
 
 ## Package layout
@@ -23,18 +29,43 @@ Intentionally deferred (do not add here):
 com.sonarmap.app
 ├── MainActivity.kt      # Compose entry point
 ├── ui/                  # Screens, navigation host
+│   └── map/             # Map screen, ViewModel, pin editor sheet
 ├── ui.theme/            # Material 3 theme
-├── domain/              # Use cases (empty, reserved)
-├── data/                # Data sources / repositories (empty, reserved)
-├── map/                 # Map provider abstraction (empty, reserved)
+├── domain/              # Models (model/), repository contract (repository/),
+│                        # geometry + gain functions (geo/, audio/) — pure Kotlin
+├── data/                # In-memory MusicPinRepository implementation
+├── map/                 # MapProvider interface + GoogleMapsProvider adapter
 ├── audio/               # Spatial audio engine (empty, reserved)
 └── location/            # GPS/location service (empty, reserved)
 ```
 
-## Requirements
+## Google Maps API key
 
-- JDK 17
-- Android SDK with platform 35 (Android Studio installs it automatically)
+1. In [Google Cloud Console](https://console.cloud.google.com/) enable
+   **Maps SDK for Android** for your project.
+2. Create an API key (APIs & Services → Credentials).
+3. Restrict it: *Application restrictions → Android apps* (add package name
+   `com.sonarmap.app` + SHA-1), *API restrictions → Maps SDK for Android*.
+4. Put the key into `local.properties` (gitignored):
+
+   ```
+   MAPS_API_KEY=AIza...
+   ```
+
+Debug keystore SHA-1: `keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android`
+
+The build substitutes the key into the manifest placeholder
+(`com.google.android.geo.API_KEY`). Without a key the app builds and runs,
+but the map renders blank tiles.
+
+> **⚠️ Unverified: "Maps SDK for Android" integration has not been verified
+> yet.** Client-side setup is correct and confirmed by logs (key, package
+> `com.sonarmap.app`, debug SHA-1 `07:44:43:D0:…:94` are submitted by Google
+> Play services and match this project), but the backend still rejects
+> authorization until the Google Cloud project has Billing enabled and
+> Maps SDK for Android activated in the same project. Until then the map
+> renders a gray placeholder instead of tiles. Mark this item verified only
+> after a real tile render on a device.
 
 ## Build
 
@@ -44,6 +75,7 @@ gradle wrapper --gradle-version 8.9
 
 ./gradlew assembleDebug          # build debug APK
 ./gradlew installDebug           # install on a connected device/emulator
+./gradlew :app:testDebugUnitTest # domain layer unit tests (pure JVM)
 ```
 
 ## minSdk = 26 — rationale
