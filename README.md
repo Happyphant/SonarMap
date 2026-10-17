@@ -8,14 +8,16 @@ Gradle Kotlin DSL, version catalog.
 Implemented:
 - App module `app` with package `com.sonarmap.app`
 - Single-Activity Compose app
-- Map screen via `MapProvider` abstraction + Google Maps Compose adapter
+- Map screen via `MapProvider` abstraction with two adapters:
+  **Yandex MapKit (default)** and Google Maps Compose (optional)
 - Long-press to place a MusicPin; marker tap opens editor bottom sheet
   (title, audio file picker, gain slider, delete)
 - In-memory pin storage (ViewModel + Repository); Room comes later
 - "My location" button using a fixed test point (no geolocation yet)
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
 - Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
-  play-services-maps + maps-compose (adapter-only)
+  `com.yandex.android:maps.mobile` (lite), play-services-maps + maps-compose
+  (adapters only)
 
 Intentionally deferred (do not add here):
 - Real geolocation / foreground service (`location` package)
@@ -34,10 +36,51 @@ com.sonarmap.app
 ├── domain/              # Models (model/), repository contract (repository/),
 │                        # geometry + gain functions (geo/, audio/) — pure Kotlin
 ├── data/                # In-memory MusicPinRepository implementation
-├── map/                 # MapProvider interface + GoogleMapsProvider adapter
+├── map/                 # MapProvider + YandexMapProvider (default) +
+│                        # GoogleMapsProvider (optional) + MapProviders selector
 ├── audio/               # Spatial audio engine (empty, reserved)
 └── location/            # GPS/location service (empty, reserved)
 ```
+
+## Choosing a map provider
+
+`map/MapProviders.kt` is the single selection point:
+
+- `MapProviders.default` — Yandex MapKit (`YandexMapProvider`), MVP default;
+  does not require Google Play services on the device.
+- `MapProviders.google` — Google Maps (`GoogleMapsProvider`), kept fully
+  working as an optional alternative.
+
+`MapScreen` reads `MapProviders.default` and nothing else; swapping the
+default never touches UI, ViewModel, or the domain layer. Both adapters only
+appear under `map/` — SDK-specific types (`com.yandex.mapkit`, `com.google.*`)
+never leak into app/domain code.
+
+## Yandex MapKit API key
+
+1. In the [Developer Dashboard](https://yandex.com/maps-api/console) connect
+   **MapKit Mobile SDK** and get an API key.
+2. Put the key into `local.properties` (gitignored):
+
+   ```
+   MAPKIT_API_KEY=<your MapKit key>
+   ```
+
+3. Initialization happens once per process in `SonarMapApplication.onCreate()`
+   (`setLocale` → `setApiKey(BuildConfig.MAPKIT_API_KEY)` → `initialize`),
+   strictly before the first `MapView` is created. The key reaches the app via
+   `BuildConfig.MAPKIT_API_KEY` and never enters version control.
+
+Notes:
+- The build uses the `-lite` artifact (map view, placemarks, gestures —
+  everything the MVP needs); routing/search SDK parts are not shipped.
+- **APK size:** with MapKit included the debug APK is ~110 MB (native
+  libraries for all four ABIs). Trimming via ABI splits is a known follow-up.
+- The Yandex key is validated at runtime; free-tier usage is counted in DAU
+  (see the Yandex tariffs FAQ).
+- ✅ **Verified on a real device**: tiles render (Moscow test point), long-tap
+  pin creation, marker-tap editor sheet, and "My location" camera flight all
+  work with MapKit 4.45.0-lite.
 
 ## Google Maps API key
 
@@ -66,6 +109,11 @@ but the map renders blank tiles.
 > Maps SDK for Android activated in the same project. Until then the map
 > renders a gray placeholder instead of tiles. Mark this item verified only
 > after a real tile render on a device.
+>
+> **✅ Verified: Yandex MapKit (default provider).** Tile rendering, key
+> authorization, long-tap pin creation, marker-tap editor, and "My location"
+> camera flight confirmed on a physical device (Samsung Galaxy S24, Android 16)
+> with `maps.mobile` 4.45.0-lite.
 
 ## Build
 

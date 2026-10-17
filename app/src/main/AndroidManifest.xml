@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- MapKit and Google Maps both load tiles over network. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- No location permission yet: "My location" uses a fixed test point. -->
 
     <application
+        android:name=".SonarMapApplication"
         android:allowBackup="false"
         android:label="SonarMap"
         android:supportsRtl="true"

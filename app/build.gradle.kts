@@ -6,12 +6,16 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// Google Maps API key comes from local.properties (gitignored): MAPS_API_KEY=...
-// Never commit the real key; a placeholder keeps the manifest resolvable on CI.
-val mapsApiKey: String = Properties().apply {
+// Both map API keys come from local.properties (gitignored). Never commit real keys.
+val properties: Properties = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use { load(it) }
-}.getProperty("MAPS_API_KEY") ?: "MISSING_MAPS_API_KEY"
+}
+// Google Maps API key -> manifest placeholder (used by GoogleMapsProvider).
+val mapsApiKey: String = properties.getProperty("MAPS_API_KEY") ?: "MISSING_MAPS_API_KEY"
+// MapKit API key -> BuildConfig field (used by YandexMapProvider), per the
+// official "Getting started" recipe for keeping keys out of VCS.
+val mapkitApiKey: String = properties.getProperty("MAPKIT_API_KEY") ?: "MISSING_MAPKIT_API_KEY"
 
 android {
     namespace = "com.sonarmap.app"
@@ -25,6 +29,8 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         manifestPlaceholders["mapsApiKey"] = mapsApiKey
+        // MapKit reads the key via BuildConfig in SonarMapApplication.onCreate.
+        buildConfigField("String", "MAPKIT_API_KEY", "\"$mapkitApiKey\"")
     }
 
     buildTypes {
@@ -48,6 +54,8 @@ android {
 
     buildFeatures {
         compose = true
+        // Needed for BuildConfig.MAPKIT_API_KEY (AGP 8 disables it by default).
+        buildConfig = true
     }
 }
 
@@ -72,7 +80,9 @@ dependencies {
     // Coroutines / Flow
     implementation(libs.kotlinx.coroutines.android)
 
-    // Maps: only the adapter (map package) may use these
+    // Maps: only the map package (providers) may use these.
+    // Yandex MapKit — default provider; Google Maps — kept working, optional.
+    implementation(libs.yandex.mapkit)
     implementation(libs.play.services.maps)
     implementation(libs.maps.compose)
 

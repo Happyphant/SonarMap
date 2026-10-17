@@ -38,8 +38,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.sonarmap.app.data.MusicPinRepositoryProvider
 import com.sonarmap.app.domain.model.GeoPoint
 import com.sonarmap.app.domain.model.MusicPin
-import com.sonarmap.app.map.GoogleMapsProvider
 import com.sonarmap.app.map.MapCallbacks
+import com.sonarmap.app.map.MapProviders
 import com.sonarmap.app.map.MapUiState
 
 @Composable
@@ -50,7 +50,7 @@ fun MapScreen(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val mapProvider = remember { GoogleMapsProvider() }
+    val mapProvider = remember { MapProviders.default }
 
     val audioPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),

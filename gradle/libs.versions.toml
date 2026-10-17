@@ -1,8 +1,12 @@
 # Version catalog for SonarMap.
-# Scope rule: only Compose, Navigation Compose, Lifecycle, Coroutines/Flow.
-# Maps, Room, audio engines (FMOD/Resonance), and location services are added later.
+# Scope rule: only Compose, Navigation Compose, Lifecycle, Coroutines/Flow,
+# and map SDKs behind the MapProvider abstraction (Yandex MapKit, Google Maps).
+# Room, audio engines (FMOD/Resonance), and location services are added later.
 
 [versions]
+# Latest stable MapKit Mobile SDK line (Sep 2026). `-lite` ships only the
+# MapView/placemarks/gestures pieces the MVP needs — smallest APK footprint.
+yandexMapkit = "4.45.0-lite"
 agp = "8.7.3"
 kotlin = "2.1.0"
 jetbrainsKotlinJvm = "2.0.21"
@@ -34,6 +38,8 @@ kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutine
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 play-services-maps = { module = "com.google.android.gms:play-services-maps", version.ref = "playServicesMaps" }
 maps-compose = { module = "com.google.maps.android:maps-compose", version.ref = "mapsCompose" }
+# Yandex MapKit Mobile SDK (default map provider for the MVP)
+yandex-mapkit = { module = "com.yandex.android:maps.mobile", version.ref = "yandexMapkit" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]
