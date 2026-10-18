@@ -55,9 +55,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.sonarmap.app.audio.ActivePinAudio
+import com.sonarmap.app.audio.AudioOutputMonitor
 import com.sonarmap.app.audio.LocationAudioController
 import com.sonarmap.app.audio.MediaPlayerAudioEngine
-import com.sonarmap.app.audio.ActivePinAudio
 import com.sonarmap.app.data.MusicPinRepositoryProvider
 import com.sonarmap.app.domain.audio.AudioEngineListener
 import com.sonarmap.app.domain.audio.AudioErrorKind
@@ -68,6 +69,7 @@ import com.sonarmap.app.location.LocationRepositoryProvider
 import com.sonarmap.app.map.MapCallbacks
 import com.sonarmap.app.map.MapProviders
 import com.sonarmap.app.map.MapUiState
+import com.sonarmap.app.sensor.HeadingSensor
 import kotlinx.coroutines.flow.map
 
 @Composable
@@ -115,20 +117,33 @@ private fun MapScreenContent(viewModel: MapViewModel) {
         }
     }
 
-    // Proximity loudness: runs for the screen's lifetime, volume follows the
-    // distance from each location fix to the selected pin. Cancelled with
-    // the composition (LaunchedEffect scope) — no leaks, no blocking.
+    // Proximity loudness + stereo pan: run for the screen's lifetime. Volume
+    // follows the distance from each location fix to the selected pin; pan
+    // follows bearing-to-pin minus user heading (mono-degraded without
+    // headphones or heading sensor). Cancelled with the composition — no
+    // leaks, no blocking.
+    val headingSensor = remember { HeadingSensor(context.applicationContext) }
+    val audioOutputMonitor = remember(context.applicationContext) {
+        AudioOutputMonitor(context.applicationContext)
+    }
+    DisposableEffect(audioOutputMonitor) {
+        audioOutputMonitor.start()
+        onDispose { audioOutputMonitor.stop() }
+    }
     LaunchedEffect(engine, viewModel) {
         LocationAudioController(engine, trace = { Log.d("SonarGain", it) }).run(
-            viewModel.uiState.map { state ->
+            activePin = viewModel.uiState.map { state ->
                 state.selectedPin?.let { pin ->
                     ActivePinAudio(
                         pinId = pin.id,
                         distanceMeters = state.distanceToSelectedPin,
+                        bearingDegrees = state.bearingToSelectedPin,
                         userGain = pin.gain,
                     )
                 }
             },
+            heading = headingSensor.heading(),
+            headphones = audioOutputMonitor.headphonesConnected,
         )
     }
 

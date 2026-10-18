@@ -2,6 +2,7 @@ package com.sonarmap.app.ui.map
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.sonarmap.app.domain.geo.bearingDegrees
 import com.sonarmap.app.domain.geo.distanceMeters
 import com.sonarmap.app.domain.location.LocationRepository
 import com.sonarmap.app.domain.location.LocationUpdate
@@ -33,6 +34,9 @@ data class MapScreenState(
     /** Great-circle meters from the current fix to the open pin; null when
      *  either is unknown. Drives proximity features (audio gain later). */
     val distanceToSelectedPin: Double? = null,
+    /** Compass bearing user->pin in [0, 360); null when either is unknown.
+     *  Drives stereo pan together with the user heading. */
+    val bearingToSelectedPin: Double? = null,
     /** One-shot camera flight request; null when nothing was requested. */
     val cameraTarget: GeoPoint? = null,
     /** Bumped on every flight request so repeats fire despite StateFlow dedup. */
@@ -83,6 +87,9 @@ class MapViewModel(
             selectedPin = selected,
             distanceToSelectedPin = selected?.let { pin ->
                 location?.let { fix -> distanceMeters(fix, pin.position) }
+            },
+            bearingToSelectedPin = selected?.let { pin ->
+                location?.let { fix -> bearingDegrees(fix, pin.position) }
             },
             cameraTarget = camera?.target,
             cameraRequestId = camera?.id ?: 0,

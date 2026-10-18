@@ -37,6 +37,7 @@ class MediaPlayerAudioEngine(
     private var sourceUri: String? = null
     private var state: AudioPlaybackState = AudioPlaybackState.Idle
     private var baseGain = 1.0
+    private var pan = 0.0
     private var ducked = false
     private var released = false
     /** User pressed play() while preparing; honored as soon as READY arrives. */
@@ -148,7 +149,12 @@ class MediaPlayerAudioEngine(
 
     override fun setVolume(gain: Double) {
         baseGain = gain.coerceIn(0.0, 1.0)
-        player?.let { applyEffectiveVolume(it) }
+        player?.let { applyEffectiveAudio(it) }
+    }
+
+    override fun setPan(pan: Double) {
+        this.pan = pan.coerceIn(-1.0, 1.0)
+        player?.let { applyEffectiveAudio(it) }
     }
 
     override fun release() {
@@ -187,13 +193,13 @@ class MediaPlayerAudioEngine(
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                 if (state == AudioPlaybackState.Playing) {
                     ducked = true
-                    player?.let { applyEffectiveVolume(it) }
+                    player?.let { applyEffectiveAudio(it) }
                 }
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
                 if (ducked) {
                     ducked = false
-                    player?.let { applyEffectiveVolume(it) }
+                    player?.let { applyEffectiveAudio(it) }
                 } else if (resumeOnFocusGain) {
                     resumeOnFocusGain = false
                     beginPlay()
@@ -218,15 +224,23 @@ class MediaPlayerAudioEngine(
             fail(AudioErrorKind.AudioFocusLost)
             return
         }
-        applyEffectiveVolume(mp)
+        applyEffectiveAudio(mp)
         mp.start()
         transition(AudioPlaybackState.Playing)
     }
 
-    /** Effective volume = base gain, reduced to 25% while ducked. */
-    private fun applyEffectiveVolume(mp: MediaPlayer) {
+    /**
+     * Effective per-channel volume = base gain shaped by the linear pan law
+     * `L = min(1, 1 - pan)`, `R = min(1, 1 + pan)`: center plays both
+     * channels at full gain, sides fade the opposite channel to zero
+     * (sum stays constant; the equal-power law is left to HRTF engines).
+     * Reduced to 25% while ducked.
+     */
+    private fun applyEffectiveAudio(mp: MediaPlayer) {
         val g = baseGain * if (ducked) 0.25 else 1.0
-        mp.setVolume(g.toFloat(), g.toFloat())
+        val left = g * (1.0 - pan).coerceAtMost(1.0)
+        val right = g * (1.0 + pan).coerceAtMost(1.0)
+        mp.setVolume(left.toFloat(), right.toFloat())
     }
 
     private fun releasePlayer() {

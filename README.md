@@ -33,6 +33,20 @@ Implemented:
   engine-volume writer while the screen is alive. Verified on device
   (Galaxy S24, unlocked screen): trace matched the formula to 3 decimals
   on a ~260 m out-and-back walk, silence inside the dead zone, no pops.
+- Stereo positioning of the active pin: relative angle
+  `relative = normalize(bearingToPin − userHeading)` drives pan
+  `pan = sign·clamp((|relative| − 10°)/(90° − 10°), 0, 1)` with EMA
+  smoothing 0.3 per tick and a ±10° dead zone (small heading wobble never
+  waggles the image). Heading comes from a rotation-vector sensor
+  (`HeadingSensor`, portrait remap); pan saturates at the sides (behind =
+  full side by convention, exact ±180° folds to the right); engine writes
+  throttled to ~10 Hz and deduplicated by a 1% threshold. Degradation:
+  no sensor, no fix, or no headphone-class output (wired/BT/USB,
+  `AudioOutputMonitor` via `registerAudioDeviceCallback`) = center/mono.
+  `Pan is a no-op in engines without a spatial stage`; the MediaPlayer
+  engine applies the linear pan law `L = gain·min(1, 1−pan)`,
+  `R = gain·min(1, 1+pan)`. ⚠️ Unverified on device (sensor direction,
+  BT headphone path, pan audibility not yet checked).
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
 - Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
   `com.yandex.android:maps.mobile` (lite), play-services-maps + maps-compose
@@ -57,8 +71,10 @@ com.sonarmap.app
 ├── data/                # In-memory MusicPinRepository implementation
 ├── map/                 # MapProvider + YandexMapProvider (default) +
 │                        # GoogleMapsProvider (optional) + MapProviders selector
-├── audio/               # Spatial audio engine (empty, reserved)
-└── location/            # GPS/location service (empty, reserved)
+├── audio/               # MediaPlayerAudioEngine, LocationAudioController,
+│                        # AudioOutputMonitor (headphone-class outputs)
+├── sensor/              # HeadingSensor (rotation vector -> compass heading)
+└── location/            # Fused location provider, Kalman smoothing
 ```
 
 ## Choosing a map provider

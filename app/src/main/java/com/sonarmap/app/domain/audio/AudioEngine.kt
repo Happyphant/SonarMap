@@ -41,6 +41,15 @@ interface AudioEngine {
     /** Linear gain 0..1; values outside are clamped. */
     fun setVolume(gain: Double)
 
+    /**
+     * Stereo position −1 (fully left) .. +1 (fully right); 0 = center.
+     * Values outside are clamped. Applied together with the current volume
+     * to playing audio immediately; retained across pause/stop. Engines
+     * without a spatial stage may implement this as a no-op, which is the
+     * required degradation for missing sensors or missing headphones.
+     */
+    fun setPan(pan: Double)
+
     /** Frees all player/audio resources. The engine cannot be reused. */
     fun release()
 }
