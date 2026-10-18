@@ -35,6 +35,8 @@ data class MapScreenState(
     val distanceToSelectedPin: Double? = null,
     /** One-shot camera flight request; null when nothing was requested. */
     val cameraTarget: GeoPoint? = null,
+    /** Bumped on every flight request so repeats fire despite StateFlow dedup. */
+    val cameraRequestId: Int = 0,
     val locationNotice: LocationNotice? = null,
 )
 
@@ -49,18 +51,29 @@ class MapViewModel(
 
     private val selectedPinId = MutableStateFlow<String?>(null)
     private val userLocation = MutableStateFlow<GeoPoint?>(null)
-    private val cameraTarget = MutableStateFlow<GeoPoint?>(null)
+
+    /** Pending camera flight: target + id. Null = nothing was requested. */
+    private val cameraRequest = MutableStateFlow<CameraRequest?>(null)
+
+    private data class CameraRequest(val target: GeoPoint, val id: Int)
+
     private val locationNotice = MutableStateFlow<LocationNotice?>(null)
 
     /** Whether the user has asked for positioning at least once. */
     private var locationRequested = false
     private var locationJob: Job? = null
+    /** Set on a FAB press without a known position; consumed by the next fix. */
+    private var pendingCameraFlight = false
+    /** Monotonically increasing flight id — beats StateFlow value dedup. */
+    private var cameraSeq = 0
+    /** Camera centered on the user at least once this process lifetime. */
+    private var hasFlown = false
 
     val uiState: StateFlow<MapScreenState> = combine(
         repository.pins,
         selectedPinId,
         userLocation,
-        cameraTarget,
+        cameraRequest,
         locationNotice,
     ) { pins, selectedId, location, camera, notice ->
         val selected = pins.firstOrNull { it.id == selectedId }
@@ -71,7 +84,8 @@ class MapViewModel(
             distanceToSelectedPin = selected?.let { pin ->
                 location?.let { fix -> distanceMeters(fix, pin.position) }
             },
-            cameraTarget = camera,
+            cameraTarget = camera?.target,
+            cameraRequestId = camera?.id ?: 0,
             locationNotice = notice,
         )
     }.stateIn(
@@ -95,12 +109,31 @@ class MapViewModel(
     // --- location ------------------------------------------------------------
 
     /**
-     * "Моё местоположение": the only entry point that starts location
-     * updates. The permission request itself lives in the UI (Compose
-     * launcher) — this runs after either a granted result or an already
-     * granted state, so no hardware subscription starts without consent.
+     * "Моё местоположение" (FAB): explicit request — always flies the camera
+     * (recentering), then starts/keeps tracking.
      */
     fun onMyLocationClick() {
+        locationRequested = true
+        val known = userLocation.value
+        if (known != null) {
+            // Known position: fly right now; the next smoothed fix may refine
+            // the dot but must not re-trigger the flight.
+            cameraRequest.value = CameraRequest(known, ++cameraSeq)
+            hasFlown = true
+        } else {
+            pendingCameraFlight = true // first fix carries the flight
+        }
+        startLocationTracking()
+    }
+
+    /**
+     * Tracking resumed because the permission is already granted (screen
+     * entry or the permission dialog's granted result). Shows the dot
+     * without user action; the camera flies once per process lifetime on
+     * the first fix ([hasFlown]) so every app open centers on the user
+     * exactly once — later resumes never yank the camera.
+     */
+    fun onLocationGranted() {
         locationRequested = true
         startLocationTracking()
     }
@@ -133,10 +166,15 @@ class MapViewModel(
             is LocationUpdate.Fix -> {
                 locationNotice.value = null
                 userLocation.value = update.location.position
-                if (cameraTarget.value == null) {
-                    // Fly exactly once per request; later smoothed fixes only
-                    // move the dot so the user keeps panning freedom.
-                    cameraTarget.value = update.location.position
+                if (pendingCameraFlight || !hasFlown) {
+                    pendingCameraFlight = false
+                    hasFlown = true
+                    // Fly exactly once per request (plus the very first fix of
+                    // the process); later smoothed fixes only move the dot so
+                    // the user keeps panning freedom. The id bump lets a
+                    // repeated FAB press fly to the same point.
+                    cameraRequest.value =
+                        CameraRequest(update.location.position, ++cameraSeq)
                 }
             }
 

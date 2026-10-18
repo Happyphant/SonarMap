@@ -62,6 +62,10 @@ class MediaPlayerAudioEngine(
 
         try {
             newPlayer.setAudioAttributes(attributes)
+            // Loop is the SonarMap semantic: a pin's sound is an ambience the
+            // user walks toward/away from — it must not end while the screen
+            // is alive. Explicit stop/pause still work as usual on top.
+            newPlayer.isLooping = true
             // Resolve the locator; throws when the file is gone or unreadable.
             newPlayer.setDataSource(context, Uri.parse(sourceUri))
         } catch (e: SecurityException) {

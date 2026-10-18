@@ -19,9 +19,14 @@ data class MapUiState(
     val userLocation: GeoPoint? = null,
     /**
      * One-shot camera flight request ("Моё местоположение"): adapters move
-     * once per change and never on plain updates. Null = no request.
+     * once per [cameraRequestId] change and never on plain updates.
+     * Null target = no request. The id increments on every request, so a
+     * repeated flight to the very same point still fires despite StateFlow
+     * value dedup — without the id, pressing the FAB twice in a row would
+     * recenter only the first time.
      */
     val cameraTarget: GeoPoint? = null,
+    val cameraRequestId: Int = 0,
 )
 
 /**

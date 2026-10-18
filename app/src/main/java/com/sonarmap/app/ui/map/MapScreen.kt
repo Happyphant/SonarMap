@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
@@ -43,8 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,7 +55,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.sonarmap.app.audio.LocationAudioController
 import com.sonarmap.app.audio.MediaPlayerAudioEngine
+import com.sonarmap.app.audio.ActivePinAudio
 import com.sonarmap.app.data.MusicPinRepositoryProvider
 import com.sonarmap.app.domain.audio.AudioEngineListener
 import com.sonarmap.app.domain.audio.AudioErrorKind
@@ -66,7 +68,7 @@ import com.sonarmap.app.location.LocationRepositoryProvider
 import com.sonarmap.app.map.MapCallbacks
 import com.sonarmap.app.map.MapProviders
 import com.sonarmap.app.map.MapUiState
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.map
 
 @Composable
 fun MapScreen() {
@@ -113,6 +115,23 @@ private fun MapScreenContent(viewModel: MapViewModel) {
         }
     }
 
+    // Proximity loudness: runs for the screen's lifetime, volume follows the
+    // distance from each location fix to the selected pin. Cancelled with
+    // the composition (LaunchedEffect scope) — no leaks, no blocking.
+    LaunchedEffect(engine, viewModel) {
+        LocationAudioController(engine, trace = { Log.d("SonarGain", it) }).run(
+            viewModel.uiState.map { state ->
+                state.selectedPin?.let { pin ->
+                    ActivePinAudio(
+                        pinId = pin.id,
+                        distanceMeters = state.distanceToSelectedPin,
+                        userGain = pin.gain,
+                    )
+                }
+            },
+        )
+    }
+
     val audioPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
@@ -128,7 +147,7 @@ private fun MapScreenContent(viewModel: MapViewModel) {
         }
     }
 
-    // --- location permission (requested only from the FAB tap) ---------------
+    // --- location (dot always on, permission asked at first screen entry) ----
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -155,11 +174,41 @@ private fun MapScreenContent(viewModel: MapViewModel) {
         }
     }
 
+    // The system permission dialog is shown exactly once per screen instance:
+    // re-launching on every ON_START would re-open the dialog (or re-fire the
+    // permanently-denied snackbar) each time the user returns to the app.
+    var autoAskedForLocation by rememberSaveable { mutableStateOf(false) }
+
+    fun hasLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_COARSE_LOCATION,
+            ) == PackageManager.PERMISSION_GRANTED
+
     // No updates while backgrounded: subscriber must be STARTED to collect.
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_START -> viewModel.startLocationTracking()
+                Lifecycle.Event.ON_START -> {
+                    if (hasLocationPermission()) {
+                        // Dot without user action; camera centers once per
+                        // process (see onLocationGranted / hasFlown).
+                        viewModel.onLocationGranted()
+                    } else if (!autoAskedForLocation) {
+                        autoAskedForLocation = true
+                        locationPermissionLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION,
+                            ),
+                        )
+                    }
+                }
+
                 Lifecycle.Event.ON_STOP -> viewModel.stopLocationTracking()
                 else -> Unit
             }
@@ -224,6 +273,7 @@ private fun MapScreenContent(viewModel: MapViewModel) {
                 markers = state.markers,
                 userLocation = state.userLocation,
                 cameraTarget = state.cameraTarget,
+                cameraRequestId = state.cameraRequestId,
             ),
             callbacks = callbacks,
             modifier = Modifier.fillMaxSize(),
@@ -231,18 +281,12 @@ private fun MapScreenContent(viewModel: MapViewModel) {
 
         FloatingActionButton(
             onClick = {
-                val granted = ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                ) == PackageManager.PERMISSION_GRANTED ||
-                    ContextCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.ACCESS_COARSE_LOCATION,
-                    ) == PackageManager.PERMISSION_GRANTED
-                if (granted) {
+                if (hasLocationPermission()) {
                     viewModel.onMyLocationClick()
                 } else {
-                    // Point-of-use request: never asked at app startup.
+                    // Point-of-use request: the dialog was already offered at
+                    // screen entry; FAB re-offers it for a previously denied
+                    // user (denial UX handled by the launcher callback).
                     locationPermissionLauncher.launch(
                         arrayOf(
                             Manifest.permission.ACCESS_FINE_LOCATION,
@@ -284,8 +328,10 @@ private fun MapScreenContent(viewModel: MapViewModel) {
             onDismiss = viewModel::closePinEditor,
             onRename = viewModel::renamePin,
             onGainChange = { gain ->
+                // Slider changes the pin's stored gain; the proximity
+                // controller is the single engine-volume writer and picks
+                // the new value up through the state flow.
                 viewModel.setPinGain(gain)
-                engine.setVolume(gain) // the slider previews its own loudness live
             },
             onPickFile = { audioPicker.launch(arrayOf("audio/*")) },
             onDelete = viewModel::deleteSelectedPin,

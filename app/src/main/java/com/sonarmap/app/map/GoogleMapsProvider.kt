@@ -40,8 +40,11 @@ class GoogleMapsProvider : MapProvider {
         }
 
         // One-shot camera flight; the dot itself moves without camera reaction.
-        LaunchedEffect(state.cameraTarget) {
-            state.cameraTarget?.let { target ->
+        // Keyed on the request id, not the target: a repeated FAB press to the
+        // same point must still fly (StateFlow dedups equal values).
+        LaunchedEffect(state.cameraRequestId) {
+            val target = state.cameraTarget
+            if (state.cameraRequestId != 0 && target != null) {
                 cameraPositionState.animate(
                     CameraUpdateFactory.newLatLngZoom(target.toLatLng(), 16f),
                 )

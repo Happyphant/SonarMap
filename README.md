@@ -18,10 +18,21 @@ Implemented:
 - In-memory pin storage (ViewModel + Repository); Room comes later
 - Real user geolocation via `LocationRepository`: FusedLocationProviderClient
   (while-in-use, no foreground service, no background usage), runtime
-  ACCESS_FINE/COARSE_LOCATION requested only from the "My location" FAB;
-  denied / permanently-denied / location-disabled / no-fix states surfaced
+  ACCESS_FINE/COARSE_LOCATION asked once at first screen entry (the FAB
+  re-offers the dialog for a previously denied user); the user dot appears
+  without any button as soon as the permission is granted; denied /
+  permanently-denied / location-disabled / no-fix states surfaced
   as snackbars; coordinates smoothed by a per-coordinate Kalman filter
   before rendering; live "distance to pin" in the editor sheet
+- Proximity loudness (`LocationAudioController`): engine volume of the
+  selected pin follows the live distance — `gain = clamp(1 - d/maxDistance, 0, 1)`,
+  maxDistance 150 m, hysteresis dead zone up to ×1.15 (mute stays muted
+  until back inside maxDistance), per-tick EMA smoothing 0.35 (~0.7 s at
+  2 Hz); no fix = full slider loudness (manual preview unaffected); pin
+  switch resets the smoothing memory; the controller is the single
+  engine-volume writer while the screen is alive. Verified on device
+  (Galaxy S24, unlocked screen): trace matched the formula to 3 decimals
+  on a ~260 m out-and-back walk, silence inside the dead zone, no pops.
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
 - Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
   `com.yandex.android:maps.mobile` (lite), play-services-maps + maps-compose
