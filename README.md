@@ -45,8 +45,13 @@ Implemented:
   `AudioOutputMonitor` via `registerAudioDeviceCallback`) = center/mono.
   `Pan is a no-op in engines without a spatial stage`; the MediaPlayer
   engine applies the linear pan law `L = gain·min(1, 1−pan)`,
-  `R = gain·min(1, 1+pan)`. ⚠️ Unverified on device (sensor direction,
-  BT headphone path, pan audibility not yet checked).
+  `R = gain·min(1, 1+pan)`. ✅ **Verified on device** (Galaxy S24, Redmi
+  Buds 3 Pro over BLE-A2DP): sensor heading within ~2° of the known
+  bearing; dead zone held center (relative −2° -> pan −0.000); ~90° left
+  turn -> pan glided to +1; ~180° right turn -> full smooth sweep
+  1.0 → 0.8 → −0.05 (wrap handled) → −1.0; Bluetooth off → pan 0.000
+  (mono, heading still live); Bluetooth reconnected → pan resumed without
+  app restart.
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
 - Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
   `com.yandex.android:maps.mobile` (lite), play-services-maps + maps-compose
