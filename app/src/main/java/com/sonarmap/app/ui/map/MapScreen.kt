@@ -480,7 +480,7 @@ private fun DrawingBanner(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        modifier = modifier.padding(top = 48.dp),
+        modifier = modifier.padding(top = 112.dp),
         shape = MaterialTheme.shapes.medium,
         tonalElevation = 6.dp,
     ) {
@@ -511,7 +511,7 @@ private fun ActiveRouteChip(
     modifier: Modifier = Modifier,
 ) {
     Surface(
-        modifier = modifier.padding(top = 48.dp),
+        modifier = modifier.padding(top = 112.dp),
         shape = MaterialTheme.shapes.medium,
         tonalElevation = 6.dp,
     ) {

@@ -58,6 +58,30 @@ Implemented:
   app restart. Behind-fade re-verified on device: a slow 180° turn passed
   through the back continuously (−0.2 → −0.09 at the back → −0.5 on the
   other side → −0.94), no ear flip, no mute/unmute pop.
+- Hand-drawn routes: "＋ Маршрут" opens a drawing draft on the map; each
+  map tap appends a vertex to an amber polyline (vertex dots visible),
+  long-press pin gesture is suppressed mid-drawing. Завершить saves the
+  route (>= 2 points enforced: the button stays disabled below that) and
+  opens the route editor sheet — rename, attach a local audio file (SAF),
+  make active, delete. UX phases **idle → drawing → completed → active**:
+  idle shows the "＋ Маршрут" entry, drawing shows a live banner
+  ("Маршрут: N точек…"), completed is the editor sheet over the gray-saved
+  polyline, active renders the route as a bold teal polyline plus a chip
+  "● Активный маршрут: … (Снять)". A routes-list screen (top-left "Маршруты"
+  button) lists routes with point count, audio file name and an active
+  badge, opens the same editor per route, and offers "Новый маршрут на
+  карте" which opens a draft and returns to the map. State lives in the
+  process-wide `RouteRepository` (in-memory until Room) shared by the map
+  and the list through `RouteViewModel` — no shared ViewModel needed.
+  Domain: `Route`, `RouteSegment`, `RouteDraft`, `Route.totalLengthMeters()`.
+  No map-provider routing API is called anywhere: routes are built by hand
+  (polyline rendering is map display, ambient `MapUiState.routeLines`).
+  ✅ **Verified on device** (Yandex MapKit adapter): the full cycle —
+  3-tap draft ("2 точки" counter, Завершить disabled at 0), finished
+  route showed "3 точки · 236 м · не активный", longtone.wav attached
+  through SAF, activation turned the line teal and raised the chip; the
+  list card showed title, points, audio name and the active flag; deselect
+  via "Снять" works; a map tap while idle creates nothing.
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
 - Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
   `com.yandex.android:maps.mobile` (lite), play-services-maps + maps-compose
@@ -66,7 +90,7 @@ Implemented:
 Intentionally deferred (do not add here):
 - Foreground service / background location (updates live only while the
   map screen is visible)
-- Route rendering and route segments on the map
+- Route-based audio (proximity to route segments, walking guidance)
 - Persistence / Room (`data` package)
 
 ## Package layout
