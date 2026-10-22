@@ -36,6 +36,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -60,6 +61,7 @@ import com.sonarmap.app.audio.AudioOutputMonitor
 import com.sonarmap.app.audio.LocationAudioController
 import com.sonarmap.app.audio.MediaPlayerAudioEngine
 import com.sonarmap.app.data.MusicPinRepositoryProvider
+import com.sonarmap.app.data.RouteRepositoryProvider
 import com.sonarmap.app.domain.audio.AudioEngineListener
 import com.sonarmap.app.domain.audio.AudioErrorKind
 import com.sonarmap.app.domain.audio.AudioPlaybackState
@@ -70,11 +72,16 @@ import com.sonarmap.app.map.MapCallbacks
 import com.sonarmap.app.map.MapProviders
 import com.sonarmap.app.map.MapUiState
 import com.sonarmap.app.sensor.HeadingSensor
+import com.sonarmap.app.ui.audioFileName
+import com.sonarmap.app.ui.routes.RouteEditorSheet
+import com.sonarmap.app.ui.routes.RoutePhase
+import com.sonarmap.app.ui.routes.RouteViewModel
 import kotlinx.coroutines.flow.map
 
 @Composable
-fun MapScreen() {
-    // Application context — the repository itself is a process-wide singleton.
+fun MapScreen(onOpenRoutes: () -> Unit = {}) {
+    // Application context — the repositories themselves are process-wide
+    // singletons; only the location stack needs an Android context.
     val context = LocalContext.current
     val viewModel = viewModel {
         MapViewModel(
@@ -82,12 +89,20 @@ fun MapScreen() {
             locationRepository = LocationRepositoryProvider.repository(context.applicationContext),
         )
     }
-    MapScreenContent(viewModel = viewModel)
+    val routeViewModel = viewModel {
+        RouteViewModel(repository = RouteRepositoryProvider.repository)
+    }
+    MapScreenContent(viewModel = viewModel, routeViewModel = routeViewModel, onOpenRoutes = onOpenRoutes)
 }
 
 @Composable
-private fun MapScreenContent(viewModel: MapViewModel) {
+private fun MapScreenContent(
+    viewModel: MapViewModel,
+    routeViewModel: RouteViewModel,
+    onOpenRoutes: () -> Unit,
+) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val routeState by routeViewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val mapProvider = remember { MapProviders.default }
@@ -159,6 +174,21 @@ private fun MapScreenContent(viewModel: MapViewModel) {
                 )
             }
             viewModel.selectAudioFile(uri.toString())
+        }
+    }
+
+    // Same picker for the route editor sheet: a route gets its own audio file.
+    val routeAudioPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
+            routeViewModel.selectAudioFile(uri.toString())
         }
     }
 
@@ -274,9 +304,20 @@ private fun MapScreenContent(viewModel: MapViewModel) {
         }
     }
 
-    val callbacks = remember(viewModel) {
+    val callbacks = remember(viewModel, routeViewModel) {
         object : MapCallbacks {
-            override fun onMapLongClick(position: GeoPoint) = viewModel.addPin(position)
+            // A plain tap is a route vertex while drawing; otherwise the map
+            // layer has no tap semantics (pins come from a long press).
+            override fun onMapClick(position: GeoPoint) = routeViewModel.onMapClick(position)
+
+            override fun onMapLongClick(position: GeoPoint) {
+                // Long press stays the pin gesture; mid-drawing it is ignored
+                // so a heavy finger never litters the drawing route with pins.
+                if (routeViewModel.uiState.value.draft == null) {
+                    viewModel.addPin(position)
+                }
+            }
+
             override fun onMarkerClick(markerId: String) = viewModel.openPinEditor(markerId)
             override fun onMyLocationClick() = viewModel.onMyLocationClick()
         }
@@ -289,10 +330,55 @@ private fun MapScreenContent(viewModel: MapViewModel) {
                 userLocation = state.userLocation,
                 cameraTarget = state.cameraTarget,
                 cameraRequestId = state.cameraRequestId,
+                routeLines = routeState.routeLines(),
             ),
             callbacks = callbacks,
             modifier = Modifier.fillMaxSize(),
         )
+
+        // --- route feature overlays: the four UX phases ----------------------
+
+        val routePhase = routeState.phase()
+        if (routePhase == RoutePhase.Drawing) {
+            val draft = routeState.draft
+            DrawingBanner(
+                pointCount = draft?.points?.size ?: 0,
+                onFinish = routeViewModel::finishDraft,
+                onCancel = routeViewModel::cancelDraft,
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
+        }
+
+        if (routePhase == RoutePhase.Active) {
+            routeState.activeRoute()?.let { route ->
+                ActiveRouteChip(
+                    title = route.title,
+                    onClear = { routeViewModel.setActiveRoute(null) },
+                    modifier = Modifier.align(Alignment.TopCenter),
+                )
+            }
+        }
+
+        OutlinedButton(
+            onClick = onOpenRoutes,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 16.dp, top = 48.dp),
+        ) {
+            Text(if (routeState.routes.isEmpty()) "Маршруты" else "Маршруты (${routeState.routes.size})")
+        }
+
+        // Phase Idle entry point: start a new hand-drawn route.
+        if (routePhase == RoutePhase.Idle) {
+            OutlinedButton(
+                onClick = routeViewModel::startDraft,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 16.dp, bottom = 112.dp),
+            ) {
+                Text("+ Маршрут")
+            }
+        }
 
         FloatingActionButton(
             onClick = {
@@ -364,6 +450,82 @@ private fun MapScreenContent(viewModel: MapViewModel) {
                 }
             },
         )
+    }
+
+    // Phase Completed: the finished (or list-opened) route editor sheet —
+    // rename, local audio attach, active-route selection, delete.
+    routeState.editedRoute?.let { route ->
+        RouteEditorSheet(
+            route = route,
+            lengthMeters = routeState.editedRouteLengthMeters,
+            fileName = remember(route.audioAssetUri) { audioFileName(context, route.audioAssetUri) },
+            isActive = route.id == routeState.activeRouteId,
+            onDismiss = routeViewModel::closeEditor,
+            onRename = routeViewModel::renameRoute,
+            onPickFile = { routeAudioPicker.launch(arrayOf("audio/*")) },
+            onSetActive = { active ->
+                routeViewModel.setActiveRoute(if (active) route.id else null)
+            },
+            onDelete = { routeViewModel.deleteRoute(route.id) },
+        )
+    }
+}
+
+/** Drawing-mode banner: live vertex count plus Завершить/Отмена controls. */
+@Composable
+private fun DrawingBanner(
+    pointCount: Int,
+    onFinish: () -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.padding(top = 48.dp),
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = 6.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Маршрут: $pointCount точек. Коснитесь карты, чтобы добавить точку",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = onCancel) { Text("Отмена") }
+                OutlinedButton(onClick = onFinish, enabled = pointCount >= 2) {
+                    Text("Завершить")
+                }
+            }
+        }
+    }
+}
+
+/** Slim chip naming the active route with a one-tap deselect. */
+@Composable
+private fun ActiveRouteChip(
+    title: String,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.padding(top = 48.dp),
+        shape = MaterialTheme.shapes.medium,
+        tonalElevation = 6.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = "● Активный маршрут: $title",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            TextButton(onClick = onClear) { Text("Снять") }
+        }
     }
 }
 
@@ -481,18 +643,6 @@ private fun PinEditorSheet(
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
-}
-
-/** Human-readable file name for the picked content URI, safe on any failure. */
-private fun audioFileName(context: Context, uriString: String): String {
-    if (uriString.isBlank()) return "аудиофайл не выбран"
-    val uri = runCatching { Uri.parse(uriString) }.getOrNull() ?: return uriString
-    val fromResolver = runCatching {
-        context.contentResolver
-            .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-            ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-    }.getOrNull()
-    return fromResolver ?: uri.lastPathSegment ?: uriString
 }
 
 /** Meters under a kilometer, kilometers with one decimal; unknown otherwise. */

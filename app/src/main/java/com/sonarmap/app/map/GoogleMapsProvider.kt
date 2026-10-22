@@ -13,6 +13,7 @@ import com.google.maps.android.compose.Circle
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
+import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
 import com.sonarmap.app.domain.model.GeoPoint
@@ -22,6 +23,9 @@ private fun GeoPoint.toLatLng(): LatLng = LatLng(latitude, longitude)
 private fun LatLng.toGeoPoint(): GeoPoint = GeoPoint(latitude, longitude)
 
 private val USER_LOCATION_COLOR = Color(0xFF3FD2C7)
+private val DRAFT_LINE_COLOR = Color(0xFFFFB300) // amber: mid-drawing
+private val ACTIVE_LINE_COLOR = Color(0xFF3FD2C7) // teal: active route
+private val IDLE_LINE_COLOR = Color(0xFF8A8F98) // gray: saved, not active
 
 /**
  * Google Maps Compose implementation of [MapProvider].
@@ -54,6 +58,7 @@ class GoogleMapsProvider : MapProvider {
         GoogleMap(
             modifier = modifier,
             cameraPositionState = cameraPositionState,
+            onMapClick = { latLng -> callbacks.onMapClick(latLng.toGeoPoint()) },
             onMapLongClick = { latLng -> callbacks.onMapLongClick(latLng.toGeoPoint()) },
         ) {
             state.markers.forEach { marker ->
@@ -84,6 +89,47 @@ class GoogleMapsProvider : MapProvider {
                     fillColor = USER_LOCATION_COLOR.copy(alpha = 0.25f),
                 )
             }
+
+            // Route polylines; draft vertices get small filled circles so
+            // individual taps are visible while drawing.
+            state.routeLines.forEach { line ->
+                if (line.points.size >= 2) {
+                    Polyline(
+                        points = line.points.map { it.toLatLng() },
+                        color = line.lineColor(),
+                        width = line.lineWidth(),
+                    )
+                }
+                if (line.isDraft) {
+                    line.points.forEach { point ->
+                        Circle(
+                            center = point.toLatLng(),
+                            radius = 3.0,
+                            strokeColor = Color.White,
+                            strokeWidth = 2f,
+                            fillColor = DRAFT_LINE_COLOR,
+                        )
+                    }
+                }
+            }
         }
+    }
+
+    /**
+     * Route-line visual policy of this adapter: the drawing draft is amber
+     * and thicker than everything else (mid-edit emphasis), the active
+     * route teal and bold, saved inactive routes a muted gray. Widths in
+     * screen pixels; the exact look is provider-specific by design.
+     */
+    private fun RouteLineUi.lineColor(): Color = when {
+        isDraft -> DRAFT_LINE_COLOR
+        isActive -> ACTIVE_LINE_COLOR
+        else -> IDLE_LINE_COLOR
+    }
+
+    private fun RouteLineUi.lineWidth(): Float = when {
+        isDraft -> 12f
+        isActive -> 10f
+        else -> 6f
     }
 }

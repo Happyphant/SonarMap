@@ -6,6 +6,7 @@ import com.sonarmap.app.domain.model.RouteSegment
 import com.sonarmap.app.domain.model.UserLocation
 import com.sonarmap.app.domain.model.segments
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -196,10 +197,18 @@ class GeoMathTest {
     }
 
     @Test
-    fun `route with fewer than two points has no segments`() {
-        val single = routeOnEquator().copy(points = listOf(GeoPoint(0.0, 0.0)))
-        assertTrue(single.segments().isEmpty())
-        assertTrue(nearestSegments(locationAt(0.0, 0.0), single, 5).isEmpty())
+    fun `route requires at least two points`() {
+        // Completed-route domain contract: a route is walkable sequence of
+        // segments, so a single-point route is rejected at construction,
+        // and `segments()` on a valid two-point route yields one segment.
+        assertThrows(IllegalArgumentException::class.java) {
+            routeOnEquator().copy(points = listOf(GeoPoint(0.0, 0.0)))
+        }
+        val twoPoints = routeOnEquator().copy(
+            points = listOf(GeoPoint(0.0, 0.0), GeoPoint(0.0, 1.0)),
+        )
+        assertEquals(1, twoPoints.segments().size)
+        assertEquals(1, nearestSegments(locationAt(0.0, 0.5), twoPoints, 5).size)
     }
 
     @Test

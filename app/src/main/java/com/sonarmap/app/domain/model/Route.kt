@@ -5,7 +5,8 @@ package com.sonarmap.app.domain.model
  *
  * @property id stable identifier
  * @property points ordered polyline vertices; segments connect consecutive points
- * @property audioAssetUri opaque reference into the audio layer
+ * @property audioAssetUri opaque reference into the audio layer;
+ *   empty string means "no audio attached yet" (same convention as [MusicPin])
  * @property createdAt epoch milliseconds, UTC
  */
 data class Route(
@@ -18,8 +19,7 @@ data class Route(
     init {
         require(id.isNotBlank()) { "id must not be blank" }
         require(title.isNotBlank()) { "title must not be blank" }
-        require(audioAssetUri.isNotBlank()) { "audioAssetUri must not be blank" }
-        require(points.isNotEmpty()) { "route must contain at least one point" }
+        require(points.size >= 2) { "route must contain at least two points, was ${points.size}" }
     }
 }
 

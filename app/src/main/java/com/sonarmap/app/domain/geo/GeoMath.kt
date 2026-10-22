@@ -84,6 +84,14 @@ fun projectPointToSegment(point: GeoPoint, segment: RouteSegment): GeoPoint {
 }
 
 /**
+ * Walking length of a route along its polyline: the sum of great-circle
+ * distances of consecutive vertices. Independent of [segments] so a single
+ * pass computes both geometry and length without object churn.
+ */
+fun Route.totalLengthMeters(): Double =
+    points.zipWithNext { start, end -> distanceMeters(start, end) }.sum()
+
+/**
  * The [maxCount] route segments closest to [location], ordered by ascending
  * great-circle distance from the user to the segment (as the crow flies,
  * not along the route). Ties break by segment index for determinism.
