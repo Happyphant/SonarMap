@@ -1,24 +1,32 @@
 package com.sonarmap.app.domain.audio
 
+import com.sonarmap.app.domain.model.MusicPin
 /**
  * Tunable proximity-to-gain parameters (defaults chosen for a walking user
  * and ~2 Hz location updates):
  *
- * - [maxDistanceMeters] 150 m — gain reaches zero exactly here; 74 m (the
- *     device-verified demo distance) lands mid-curve at ~0.5.
+ * - [defaultMaxDistanceMeters] 150 m — the default hearing-area radius;
+ *     [ProximityGainCalculator.update] takes the actual per-source radius
+ *     as an argument (the audible zone now has a user-settable size).
+ * - [edgeGain] 0.15 — the "minimal volume" floor exactly at the zone edge:
+ *     entering the area turns the sound ON at this level, approaching the
+ *     source raises it linearly to 1.0.
  * - [hysteresisFactor] 1.15 — the source is *deactivated* only past
- *     maxDistance * 1.15 and *reactivated* only before maxDistance, so
- *     GPS jitter around the boundary cannot flicker the state.
+ *     zoneRadius * 1.15 and *reactivated* at the zone edge itself
+ *     (radius), so the sound starts exactly when the visual fill is
+ *     entered and GPS jitter around the boundary cannot flicker it.
  * - [smoothingFactor] 0.35 per update (~0.7 s time constant at 2 Hz) —
  *     enough to hide sensor steps, small enough to feel responsive.
  */
 data class ProximityGainParams(
-    val maxDistanceMeters: Double = 150.0,
+    val defaultMaxDistanceMeters: Double = MusicPin.DEFAULT_AUDIBLE_RADIUS_METERS,
+    val edgeGain: Double = 0.15,
     val hysteresisFactor: Double = 1.15,
     val smoothingFactor: Double = 0.35,
 ) {
     init {
-        require(maxDistanceMeters > 0.0) { "maxDistanceMeters must be positive" }
+        require(defaultMaxDistanceMeters > 0.0) { "defaultMaxDistanceMeters must be positive" }
+        require(edgeGain in 0.0..1.0) { "edgeGain must be in [0, 1]" }
         require(hysteresisFactor >= 1.0) { "hysteresisFactor must not shrink the dead zone" }
         require(smoothingFactor in 0.0..1.0) { "smoothingFactor must be in [0, 1]" }
     }
@@ -29,23 +37,26 @@ data class ProximityGainParams(
  * com.sonarmap.app.audio.LocationAudioController. Formula per location tick:
  *
  * ```
- * raw      = clamp(1 - distance / maxDistance, 0, 1)   // linear falloff
- * raw      = if (hysteresisActive) raw else 0.0         // dead zone after mute
- * target   = raw * clamp(pinGain, 0, 1)                // user slider on top
+ * raw      = clamp(1 - distance / zoneRadius, 0, 1)   // linear falloff
+ * shaped   = edgeGain + (1 - edgeGain) * raw          // floor at the edge
+ * shaped   = if (hysteresisActive) shaped else 0.0    // silent after mute
+ * target   = shaped * clamp(userGain, 0, 1)           // user slider on top
  * smoothed = smoothGain(previous, target, smoothingFactor)
  * ```
  *
- * Hysteresis band: [maxDistance .. maxDistance * hysteresisFactor] is a
- * dead zone — once muted, the source stays muted there; it comes back only
- * when the user is again within [maxDistance]. Without the band, returning
- * fixes at 150–172 m would toggle the (already-zero) gain flag every tick.
+ * Hysteresis band: [zoneRadius .. zoneRadius * hysteresisFactor] keeps the
+ * previous state — once muted (past the outer threshold) the source stays
+ * silent there; while playing, a step just outside the visible zone fades
+ * to the [edgeGain] floor instead of falling to zero, and full muting only
+ * happens past `zoneRadius * 1.15`. Inward reactivation happens exactly at
+ * the zone edge, matching what the map paints as the hearing area.
  *
  * Missing fix (distance == null): proximity is held at its last value, so a
  * brief GPS gap does not pump the volume; before the first fix proximity
  * defaults to 1.0 — a manual preview plays at the user's slider level.
  *
  * All inputs are defensively clamped; nothing here throws on UI noise.
- * Stateful — call [reset] when the active pin changes.
+ * Stateful — call [reset] when the active audio source changes.
  */
 class ProximityGainCalculator(
     private val params: ProximityGainParams = ProximityGainParams(),
@@ -61,12 +72,19 @@ class ProximityGainCalculator(
      * Feeds one location tick; returns the smoothed effective gain to apply
      * to the audio engine right now.
      *
-     * @param distanceMeters great-circle meters to the active pin, or null
+     * @param distanceMeters great-circle meters to the active source, or null
      *   when there is no fix yet
-     * @param pinGain the pin's own loudness knob (slider), linear 0..1
+     * @param userGain the source's own loudness knob (slider), linear 0..1
+     * @param zoneRadiusMeters the active source's hearing-area radius in
+     *   meters (pins and routes carry their own, editor-sheet adjustable)
      */
-    fun update(distanceMeters: Double?, pinGain: Double): Double {
-        val slider = pinGain.coerceIn(0.0, 1.0)
+    fun update(
+        distanceMeters: Double?,
+        userGain: Double,
+        zoneRadiusMeters: Double = params.defaultMaxDistanceMeters,
+    ): Double {
+        val slider = userGain.coerceIn(0.0, 1.0)
+        val radius = zoneRadiusMeters.coerceAtLeast(1e-6)
 
         if (distanceMeters == null) {
             // No fix: keep the last proximity decision, just rescale to the
@@ -77,16 +95,17 @@ class ProximityGainCalculator(
 
         seenDistance = true
         val distance = distanceMeters.coerceAtLeast(0.0)
-        updateHysteresis(distance)
+        updateHysteresis(distance, radius)
 
-        val raw = (1.0 - distance / params.maxDistanceMeters).coerceIn(0.0, 1.0)
-        lastProximity = if (hysteresisActive) raw else 0.0
+        val raw = (1.0 - distance / radius).coerceIn(0.0, 1.0)
+        val shaped = params.edgeGain + (1.0 - params.edgeGain) * raw
+        lastProximity = if (hysteresisActive) shaped else 0.0
 
         lastOutput = smoothGain(lastOutput, lastProximity * slider, params.smoothingFactor)
         return lastOutput
     }
 
-    /** Clears state for a newly selected pin; no stale proximity leaks over. */
+    /** Clears state for a newly selected source; no stale proximity leaks over. */
     fun reset() {
         hysteresisActive = true
         seenDistance = false
@@ -94,11 +113,11 @@ class ProximityGainCalculator(
         lastOutput = 0.0
     }
 
-    private fun updateHysteresis(distance: Double) {
-        val offThreshold = params.maxDistanceMeters * params.hysteresisFactor
+    private fun updateHysteresis(distance: Double, radius: Double) {
+        val offThreshold = radius * params.hysteresisFactor
         if (seenDistance) {
             if (hysteresisActive && distance > offThreshold) hysteresisActive = false
-            if (!hysteresisActive && distance < params.maxDistanceMeters) hysteresisActive = true
+            if (!hysteresisActive && distance < radius) hysteresisActive = true
         }
     }
 }

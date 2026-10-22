@@ -13,6 +13,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -20,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.sonarmap.app.domain.model.Route
+import kotlin.math.roundToInt
 
 /**
  * Editor for one saved route — rename, attach a local audio file, make it
@@ -38,6 +40,7 @@ fun RouteEditorSheet(
     onDismiss: () -> Unit,
     onRename: (String) -> Unit,
     onPickFile: () -> Unit,
+    onRadiusChange: (Double) -> Unit,
     onSetActive: (Boolean) -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -89,6 +92,21 @@ fun RouteEditorSheet(
                 ) { Text("Сделать активным") }
             }
 
+            // Corridor width of the painted hearing area; the gain curve
+            // follows the same number (floor at the boundary, louder inside).
+            Column {
+                Text(
+                    text = "Область слышимости: ${route.audibleRadiusMeters.roundToInt()} м",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Slider(
+                    value = route.audibleRadiusMeters.toFloat().coerceIn(50f, 500f),
+                    onValueChange = { onRadiusChange(it.toDouble().roundToStep()) },
+                    valueRange = 50f..500f,
+                    steps = 44, // 10-meter detents
+                )
+            }
+
             TextButton(
                 onClick = onDelete,
                 colors = ButtonDefaults.textButtonColors(
@@ -117,3 +135,6 @@ private fun routeSummary(route: Route, lengthMeters: Double?, isActive: Boolean)
         append(" · ")
         append(if (isActive) "активный" else "не активный")
     }
+
+/** Snaps a raw slider position to 10-meter detents (fixes FP drift). */
+private fun Double.roundToStep(): Double = (this / 10.0).roundToInt() * 10.0

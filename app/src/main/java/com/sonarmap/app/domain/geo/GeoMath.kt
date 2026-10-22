@@ -163,3 +163,108 @@ fun Route.projection(position: GeoPoint): RouteProjection {
     }
     return RouteProjection(bestPoint, bestDistance, bestIndex)
 }
+
+/** Semicircle steps of the zone's round caps (visual, not acoustic). */
+private const val ZONE_CAP_STEPS = 12
+
+/** Fallback walking direction for a fully degenerate (zero-length) route. */
+private val DOUBLE_UNIT_X = doubleArrayOf(1.0, 0.0)
+
+/**
+ * Boundary of a route's hearing area: a closed buffer polygon around the
+ * polyline at distance [radiusMeters] (the corridor the map renders as the
+ * "область слышимости" outline/fill). Semicircle caps at the ends; interior
+ * vertices are miter-joined via averaged adjacent normals, so at very sharp
+ * bends the boundary can sit marginally closer than the radius to the line
+ * — acceptable for hand-drawn walking routes, exact buffering is overkill
+ * for a translucent shading layer.
+ *
+ * Works in one local equirectangular frame anchored at the first vertex
+ * (same frame family as [projectPointToSegment]); accurate for city-scale
+ * routes.
+ */
+fun Route.audibleZoneBoundary(radiusMeters: Double): List<GeoPoint> {
+    require(radiusMeters > 0.0) { "radiusMeters must be positive, was $radiusMeters" }
+
+    val anchor = points.first()
+    val cosRef = cos(anchor.latitude * RAD_PER_DEGREE).coerceAtLeast(1e-9)
+
+    // Local frame: x = meters east, y = meters north of the anchor.
+    val xs = points.map { EARTH_RADIUS_METERS * longitudeDelta(anchor.longitude, it.longitude) * RAD_PER_DEGREE * cosRef }
+    val ys = points.map { EARTH_RADIUS_METERS * (it.latitude - anchor.latitude) * RAD_PER_DEGREE }
+
+    // Per-vertex unit left normal (interior: mean of the adjacent ones).
+    val n = xs.size
+    val leftUnit = arrayOfNulls<DoubleArray>(n)
+    val directions = arrayOfNulls<DoubleArray>(n - 1) // segment unit directions
+    for (i in 0 until n - 1) {
+        val dx = xs[i + 1] - xs[i]
+        val dy = ys[i + 1] - ys[i]
+        val length = sqrt(dx * dx + dy * dy)
+        if (length >= 1e-6) directions[i] = doubleArrayOf(dx / length, dy / length)
+    }
+    for (i in 0 until n) {
+        // Nearest VALID segment directions around the vertex (zero-length
+        // duplicates in between are skipped, scanning outwards).
+        val prev = (i - 1 downTo 0).firstNotNullOfOrNull { j ->
+            directions[j]?.let { d -> doubleArrayOf(-d[1], d[0]) } // left of direction
+        }
+        val next = (i until n - 1).firstNotNullOfOrNull { j ->
+            directions[j]?.let { d -> doubleArrayOf(-d[1], d[0]) }
+        }
+        val unit = when {
+            prev != null && next != null -> {
+                val sumX = prev[0] + next[0]
+                val sumY = prev[1] + next[1]
+                val sumLength = sqrt(sumX * sumX + sumY * sumY)
+                if (sumLength < 1e-9) prev // U-turn: bevel with the previous side
+                else doubleArrayOf(sumX / sumLength, sumY / sumLength)
+            }
+            prev != null -> prev
+            next != null -> next
+            else -> DOUBLE_UNIT_X // fully degenerate; direction irrelevant
+        }
+        leftUnit[i] = unit
+    }
+
+    fun backProject(x: Double, y: Double) = GeoPoint(
+        latitude = anchor.latitude + (y / EARTH_RADIUS_METERS) * DEG_PER_RAD,
+        longitude = anchor.longitude + (x / (EARTH_RADIUS_METERS * cosRef)) * DEG_PER_RAD,
+    )
+
+    val boundary = mutableListOf<GeoPoint>()
+    // Inner side of the corridor (left of walking direction), walking order.
+    for (i in 0 until n) boundary += backProject(xs[i] + leftUnit[i]!![0] * radiusMeters, ys[i] + leftUnit[i]!![1] * radiusMeters)
+    // Semicircular cap around the end vertex (through the forward direction).
+    val endDir = directions[n - 2] ?: DOUBLE_UNIT_X
+    run {
+        val base = atan2(endDir[1], endDir[0])
+        for (step in 1 until ZONE_CAP_STEPS) {
+            val angle = base + (PI / 2) - PI * step / ZONE_CAP_STEPS
+            boundary += backProject(
+                xs[n - 1] + radiusMeters * cos(angle),
+                ys[n - 1] + radiusMeters * sin(angle),
+            )
+        }
+    }
+    // Outer side of the corridor, reversed walking order.
+    for (i in n - 1 downTo 0) {
+        val u = leftUnit[i]!!
+        boundary += backProject(xs[i] - u[0] * radiusMeters, ys[i] - u[1] * radiusMeters)
+    }
+    // Semicircular cap around the start vertex (through the backward direction).
+    val startDir = directions[0] ?: DOUBLE_UNIT_X
+    run {
+        val base = atan2(startDir[1], startDir[0])
+        for (step in 1 until ZONE_CAP_STEPS) {
+        // Decreasing angle: the arc bulges BACKWARD (through -dir), not
+        // through the corridor interior — otherwise the polygon self-intersects.
+        val angle = base - (PI / 2) - PI * step / ZONE_CAP_STEPS
+            boundary += backProject(
+                xs[0] + radiusMeters * cos(angle),
+                ys[0] + radiusMeters * sin(angle),
+            )
+        }
+    }
+    return boundary
+}

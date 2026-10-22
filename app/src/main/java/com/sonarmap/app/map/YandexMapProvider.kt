@@ -20,6 +20,9 @@ import com.sonarmap.app.domain.model.GeoPoint
 import com.yandex.mapkit.MapKitFactory
 import com.yandex.mapkit.geometry.Point
 import com.yandex.mapkit.geometry.Polyline
+import com.yandex.mapkit.geometry.Circle
+import com.yandex.mapkit.geometry.LinearRing
+import com.yandex.mapkit.geometry.Polygon
 import com.yandex.mapkit.map.CameraPosition
 import com.yandex.mapkit.map.InputListener
 import com.yandex.mapkit.map.Map
@@ -37,6 +40,19 @@ private const val USER_DOT_COLOR_ARGB = 0xFF4C8BF5.toInt()
 private const val DRAFT_LINE_COLOR_ARGB = 0xFFFFB300.toInt() // amber: mid-drawing
 private const val ACTIVE_LINE_COLOR_ARGB = 0xFF3FD2C7.toInt() // teal: active route
 private const val IDLE_LINE_COLOR_ARGB = 0xFF8A8F98.toInt() // gray: saved, not active
+
+/** Zone stroke shared by the active and idle hearing-area contours. */
+private const val ZONE_STROKE_WIDTH = 1.5f
+
+/**
+ * Hearing-area painting policy of this adapter: the active zone gets a
+ * translucent teal fill plus a teal contour, an inactive one only a faint
+ * gray contour (fully transparent fill). Colors follow the ARGB int
+ * convention Yandex MapKit styles use (RGBA-like byte order).
+ */
+private fun AudibleZoneUi.fillArgb(): Int = if (isActive) 0x2E3FD2C7.toInt() else 0x00000000
+private fun AudibleZoneUi.strokeArgb(): Int =
+    if (isActive) ACTIVE_LINE_COLOR_ARGB else 0x808A8F98.toInt()
 private const val INITIAL_ZOOM = 13f
 private const val MY_LOCATION_ZOOM = 16f
 
@@ -157,11 +173,38 @@ class YandexMapProvider : MapProvider {
             state.markers,
             state.userLocation,
             state.routeLines,
+            state.audibleZones,
             pinIcon,
             userDotIcon,
         ) {
             val mapObjects = mapView.mapWindow.map.mapObjects
             mapObjects.clear()
+            // Hearing areas go FIRST (added objects stack bottom-up): zones sit
+            // under route polylines and markers. No tap listeners on them —
+            // a tap on the shading must fall through to the map/line itself.
+            state.audibleZones.forEach { zone ->
+                when (zone) {
+                    is PinAudibleZoneUi -> {
+                        val circle = mapObjects.addCircle(
+                            Circle(zone.center.toYandexPoint(), zone.radiusMeters.toFloat()),
+                        )
+                        circle.setFillColor(zone.fillArgb())
+                        circle.setStrokeColor(zone.strokeArgb())
+                        circle.setStrokeWidth(ZONE_STROKE_WIDTH)
+                    }
+                    is RouteAudibleZoneUi -> {
+                        val polygon = mapObjects.addPolygon(
+                            Polygon(
+                                LinearRing(zone.boundary.map { it.toYandexPoint() }),
+                                emptyList(),
+                            ),
+                        )
+                        polygon.setFillColor(zone.fillArgb())
+                        polygon.setStrokeColor(zone.strokeArgb())
+                        polygon.setStrokeWidth(ZONE_STROKE_WIDTH)
+                    }
+                }
+            }
             state.markers.forEach { marker ->
                 val placemark = mapObjects.addPlacemark(marker.position.toYandexPoint())
                 placemark.userData = marker.id

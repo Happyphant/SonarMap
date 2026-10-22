@@ -11,7 +11,7 @@ Implemented:
 - Map screen via `MapProvider` abstraction with two adapters:
   **Yandex MapKit (default)** and Google Maps Compose (optional)
 - Long-press to place a MusicPin; marker tap opens editor bottom sheet
-  (title, audio file picker, gain slider, delete)
+  (title, audio file picker, gain slider, hearing-area slider, delete)
 - Local audio preview via the `AudioEngine` boundary: MediaPlayer-backed
   engine (no FMOD/Resonance), SAF-picked files, volume slider wired live,
   default gain 0.7, audio focus handled, resources freed on screen exit
@@ -33,6 +33,9 @@ Implemented:
   engine-volume writer while the screen is alive. Verified on device
   (Galaxy S24, unlocked screen): trace matched the formula to 3 decimals
   on a ~260 m out-and-back walk, silence inside the dead zone, no pops.
+  (Superseded: the maxDistance is now a per-source audible zone radius —
+  see "Hearing areas"; the curve enters at an edge floor of 0.15 instead
+  of zero, everything else holds.)
 - Stereo positioning of the active pin: relative angle
   `relative = normalize(bearingToPin − userHeading)` drives a triangular
   pan curve — dead zone ±10° (center), linear ramp to ±1 at ±90° (sides),
@@ -132,6 +135,41 @@ Implemented:
   labels update with entity counts ("Маршруты и метки (2)" with both);
   the idle gray route line still opens its editor by tap while a pin's
   sound keeps playing.
+- Hearing areas ("область слышимости") — every pin and route carries its own
+  `audibleRadiusMeters` (domain model, default 150 m; repository-clamped
+  10..5000). The map renders a zone per source: a circle around each pin
+  and a corridor polygon around each route polyline (`Route.audibleZoneBoundary`
+  builds a miter buffer with semicircular caps in a local equirectangular
+  frame); the ONE active source is filled semitransparent teal, inactive
+  ones are contour-only gray. Zones draw beneath lines/markers and are
+  tap-through (no listeners on Yandex; Google layers `clickable = false`).
+  Size is edited with a slider in both editor sheets ("Область слышимости",
+  50–500 m, 10 m detents) through `updateAudibleRadius` in both
+  repositories. The gain curve follows the same radius per source: silence
+  outside the zone, ON at the zone edge at the `edgeGain` floor (0.15 —
+  "минимальная громкость"), rising linearly to full loudness at the source
+  (`ProximityGainCalculator.update` now takes the per-source radius;
+  inward reactivation happens exactly at the painted boundary, outward
+  mute stays at radius × 1.15 with the old hysteresis). Pin slider gain
+  and route gain (1.0) multiply on top as before. MVP note: the mute floor
+  replaced the old "silent at 150 m" semantics — the hysteresis dead band
+  remains for GPS-jitter immunity.
+  ✅ **Verified on device** (Galaxy S24, Redmi Buds 3 Pro): gray contour
+  circles around idle pins; the active pin's circle filled instantly with
+  the trace matching the per-radius formula exactly (390 m ->
+  `(0.15 + 0.85·(1 − d/390)) · slider = 0.521` at d = 104 m); slider drags
+  rescale the live geometry and the curve together (210 m -> 0.390,
+  480 m -> 0.550, both matching to the third digit); a route activated as
+  the source took over within one tick (`d = 48.5 m, R = 150 ->
+  gain 0.725`), its corridor rendered as a filled capsule corridor with
+  round caps; shot-off source turned contour-only (filled fill jumped
+  between circle and capsule; the route chip and gray idle line behaved as
+  before); closing/reopening sheets mid-playback never stopped the sound
+  (trace continuous through sheet transitions). Unit coverage: edge-floor
+  curve, per-source radius, hysteresis both directions, buffer geometry
+  (constant radius on a straight route, full corridor width, duplicate
+  points tolerance, non-positive radius rejected), repository
+  `updateAudibleRadius` round trip + clamps — 128 tests green.
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
 - Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
   `com.yandex.android:maps.mobile` (lite), play-services-maps + maps-compose
@@ -140,7 +178,7 @@ Implemented:
 Intentionally deferred (do not add here):
 - Foreground service / background location (updates live only while the
   map screen is visible)
-- Route-based audio (proximity to route segments, walking guidance)
+- Walking guidance beyond the proximity gain (turn-by-turn prompts)
 - Persistence / Room (`data` package)
 
 ## Package layout

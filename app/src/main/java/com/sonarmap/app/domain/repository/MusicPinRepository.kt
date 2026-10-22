@@ -33,6 +33,13 @@ interface MusicPinRepository {
     /** Gain is clamped to >= 0 to satisfy the MusicPin contract. */
     suspend fun updateGain(id: String, gain: Double)
 
+    /**
+     * Resizes the pin's hearing area. The value is clamped into the
+     * [MIN_AUDIBLE_RADIUS, MAX_AUDIBLE_RADIUS] range that the editor sheet's
+     * slider operates in (a little beyond, so future UIs have headroom).
+     */
+    suspend fun updateAudibleRadius(id: String, radiusMeters: Double)
+
     /** Empty string detaches the audio file. */
     suspend fun updateAudioAssetUri(id: String, audioAssetUri: String)
 

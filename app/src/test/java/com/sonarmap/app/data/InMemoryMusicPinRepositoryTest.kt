@@ -56,6 +56,22 @@ class InMemoryMusicPinRepositoryTest {
     }
 
     @Test
+    fun `updateAudibleRadius round trip and clamping`() = runBlocking {
+        val repo = InMemoryMusicPinRepository()
+        val pin = repo.addPin(moscow, defaultTitle = "Пин 1")
+        assertEquals(MusicPin.DEFAULT_AUDIBLE_RADIUS_METERS, pin.audibleRadiusMeters, 1e-12)
+
+        repo.updateAudibleRadius(pin.id, 250.0)
+        assertEquals(250.0, repo.pins.first().single().audibleRadiusMeters, 1e-12)
+
+        // Slider garbage beyond the storage range is coerced, not rejected.
+        repo.updateAudibleRadius(pin.id, 1.0)
+        assertEquals(MusicPin.MIN_AUDIBLE_RADIUS_METERS, repo.pins.first().single().audibleRadiusMeters, 1e-12)
+        repo.updateAudibleRadius(pin.id, 99_999.0)
+        assertEquals(MusicPin.MAX_AUDIBLE_RADIUS_METERS, repo.pins.first().single().audibleRadiusMeters, 1e-12)
+    }
+
+    @Test
     fun `updateAudioAssetUri round trip`() = runBlocking {
         val repo = InMemoryMusicPinRepository()
         val pin = repo.addPin(moscow, defaultTitle = "Пин 1")

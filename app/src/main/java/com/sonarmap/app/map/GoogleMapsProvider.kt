@@ -13,6 +13,7 @@ import com.google.maps.android.compose.Circle
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
+import com.google.maps.android.compose.Polygon
 import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
 import com.google.maps.android.compose.rememberMarkerState
@@ -26,6 +27,18 @@ private val USER_LOCATION_COLOR = Color(0xFF3FD2C7)
 private val DRAFT_LINE_COLOR = Color(0xFFFFB300) // amber: mid-drawing
 private val ACTIVE_LINE_COLOR = Color(0xFF3FD2C7) // teal: active route
 private val IDLE_LINE_COLOR = Color(0xFF8A8F98) // gray: saved, not active
+
+/** Zone contour / fill policy (same palette as the Yandex provider). */
+private val ZONE_ACTIVE_STROKE_COLOR = Color(0xFF3FD2C7)
+private val ZONE_ACTIVE_FILL_COLOR = Color(0xFF3FD2C7).copy(alpha = 0.18f)
+private val ZONE_IDLE_STROKE_COLOR = Color(0xFF8A8F98).copy(alpha = 0.5f)
+private val ZONE_IDLE_FILL_COLOR = Color.Transparent
+
+private fun AudibleZoneUi.strokeColor(): Color =
+    if (isActive) ZONE_ACTIVE_STROKE_COLOR else ZONE_IDLE_STROKE_COLOR
+
+private fun AudibleZoneUi.fillColor(): Color =
+    if (isActive) ZONE_ACTIVE_FILL_COLOR else ZONE_IDLE_FILL_COLOR
 
 /**
  * Google Maps Compose implementation of [MapProvider].
@@ -61,6 +74,30 @@ class GoogleMapsProvider : MapProvider {
             onMapClick = { latLng -> callbacks.onMapClick(latLng.toGeoPoint()) },
             onMapLongClick = { latLng -> callbacks.onMapLongClick(latLng.toGeoPoint()) },
         ) {
+            // Hearing-area layer first (declaration order = z-order below the
+            // markers and polylines added later). clickable = false keeps all
+            // taps passing through to the map and route lines.
+            state.audibleZones.forEach { zone ->
+                if (zone is PinAudibleZoneUi) {
+                    Circle(
+                        center = zone.center.toLatLng(),
+                        radius = zone.radiusMeters,
+                        clickable = false,
+                        strokeColor = zone.strokeColor(),
+                        strokeWidth = 2f,
+                        fillColor = zone.fillColor(),
+                    )
+                } else if (zone is RouteAudibleZoneUi) {
+                    Polygon(
+                        points = zone.boundary.map { it.toLatLng() },
+                        clickable = false,
+                        strokeColor = zone.strokeColor(),
+                        strokeWidth = 2f,
+                        fillColor = zone.fillColor(),
+                    )
+                }
+            }
+
             state.markers.forEach { marker ->
                 // Pin position is immutable, so a one-shot remembered state is safe;
                 // `key` ties the state to the marker identity.

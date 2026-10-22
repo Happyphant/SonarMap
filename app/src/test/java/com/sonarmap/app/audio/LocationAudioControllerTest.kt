@@ -55,8 +55,9 @@ class LocationAudioControllerTest {
             headphones = noPanInputs.second,
         )
 
-        // raw = 1 - 75/150 = 0.5; target = 0.5 * 0.8 = 0.4 (factor 1.0: no lag)
-        assertEquals(0.4, engine.volumes.single(), 1e-9)
+        // shaped = 0.15 + 0.85*(1 - 75/150) = 0.575; target = 0.575 * 0.8 = 0.46
+        // (factor 1.0: no lag)
+        assertEquals(0.46, engine.volumes.single(), 1e-9)
     }
 
     @Test
@@ -81,14 +82,14 @@ class LocationAudioControllerTest {
         LocationAudioController(engine, ProximityGainCalculator(), nowMillis = flowingClock).run(
             activePin = flowOf(
                 PositionedSourceAudio("p1", 0.0, null, 1.0),  // out = 0.35 * 1.0 = 0.35
-                PositionedSourceAudio("p2", 75.0, null, 1.0), // fresh state: 0 + 0.35 * 0.5
+                PositionedSourceAudio("p2", 75.0, null, 1.0), // fresh state: 0 + 0.35 * 0.575
             ),
             heading = noPanInputs.first,
             headphones = noPanInputs.second,
         )
 
-        // Without the reset it would be 0.35 + 0.35 * (0.5 - 0.35) = 0.4025.
-        assertEquals(0.175, engine.volumes.last(), 1e-9)
+        // Without the reset it would be 0.35 + 0.35 * (0.575 - 0.35) = 0.42875.
+        assertEquals(0.35 * 0.575, engine.volumes.last(), 1e-9)
     }
 
     @Test
@@ -138,9 +139,28 @@ class LocationAudioControllerTest {
         // Two leading "nothing active" ticks center the engine; far out the
         // pan is fully directional (+1); ON the line the bearing to the
         // projected point degenerates, so the pan centers (0). Gain on the
-        // line is FULL loudness (fade is pan-only: 1 - d/150 stays).
+        // line is FULL loudness (fade is pan-only: shaped curve stays).
         assertEquals(listOf(0.0, 1.0, 0.0), engine.pans)
-        assertEquals(listOf(0.0, 0.8, 1.0), engine.volumes)
+        // 0.83 within FP noise of the edgeGain curve arithmetic.
+        assertEquals(0.0, engine.volumes[0], 1e-9)
+        assertEquals(0.83, engine.volumes[1], 1e-6)
+        assertEquals(1.0, engine.volumes[2], 1e-9)
+    }
+
+    @Test
+    fun `audible radius is taken from the source not the default`() = runTest {
+        val engine = FakeAudioEngine()
+        LocationAudioController(engine, ProximityGainCalculator(fast), nowMillis = flowingClock).run(
+            activePin = flowOf(
+                PositionedSourceAudio("p1", 30.0, null, 1.0, audibleRadiusMeters = 60.0),
+            ),
+            heading = noPanInputs.first,
+            headphones = noPanInputs.second,
+        )
+
+        // shaped = 0.15 + 0.85 * (1 - 30/60) = 0.575 (with the default 150 m
+        // radius the same 30 m would land at 0.83).
+        assertEquals(0.575, engine.volumes.single(), 1e-9)
     }
 
     @Test
@@ -202,7 +222,8 @@ class LocationAudioControllerTest {
 
         // The write threshold dedups the identical second tick: one write.
         assertEquals(1, engine.volumes.size)
-        assertEquals(0.4, engine.volumes.single(), 1e-9)
+        // shaped = 0.15 + 0.85*(1 - 75/150) = 0.575; target = 0.575 * 0.8 = 0.46
+        assertEquals(0.46, engine.volumes.single(), 1e-9)
     }
 
     @Test
@@ -222,7 +243,8 @@ class LocationAudioControllerTest {
         )
 
         assertEquals(1, engine.volumes.size)
-        assertEquals(0.3333333, engine.volumes.single(), 1e-6)
+        // shaped = 0.15 + 0.85*(1 - 100/150) = 0.4333...
+        assertEquals(0.4333333, engine.volumes.single(), 1e-6)
     }
 
     @Test

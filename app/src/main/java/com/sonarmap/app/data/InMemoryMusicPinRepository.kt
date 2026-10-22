@@ -48,6 +48,17 @@ class InMemoryMusicPinRepository : MusicPinRepository {
         replaceWhere({ it.id == id }) { it.copy(gain = gain.coerceAtLeast(0.0)) }
     }
 
+    override suspend fun updateAudibleRadius(id: String, radiusMeters: Double): Unit = mutex.withLock {
+        replaceWhere({ it.id == id }) {
+            it.copy(
+                audibleRadiusMeters = radiusMeters.coerceIn(
+                    MusicPin.MIN_AUDIBLE_RADIUS_METERS,
+                    MusicPin.MAX_AUDIBLE_RADIUS_METERS,
+                ),
+            )
+        }
+    }
+
     override suspend fun updateAudioAssetUri(id: String, audioAssetUri: String): Unit = mutex.withLock {
         replaceWhere({ it.id == id }) { it.copy(audioAssetUri = audioAssetUri) }
     }

@@ -1,6 +1,7 @@
 package com.sonarmap.app.data
 
 import com.sonarmap.app.domain.model.GeoPoint
+import com.sonarmap.app.domain.model.MusicPin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -121,6 +122,21 @@ class InMemoryRouteRepositoryTest {
 
         repo.updateAudioAssetUri(route.id, "")
         assertEquals("", repo.routes.first().single().audioAssetUri)
+    }
+
+    @Test
+    fun `updateAudibleRadius round trip and clamping`() = runBlocking {
+        val repo = InMemoryRouteRepository()
+        val route = savedRoute(repo)
+        assertEquals(MusicPin.DEFAULT_AUDIBLE_RADIUS_METERS, route.audibleRadiusMeters, 1e-12)
+
+        repo.updateAudibleRadius(route.id, 350.0)
+        assertEquals(350.0, repo.routes.first().single().audibleRadiusMeters, 1e-12)
+
+        repo.updateAudibleRadius(route.id, 1.0)
+        assertEquals(MusicPin.MIN_AUDIBLE_RADIUS_METERS, repo.routes.first().single().audibleRadiusMeters, 1e-12)
+        repo.updateAudibleRadius(route.id, 99_999.0)
+        assertEquals(MusicPin.MAX_AUDIBLE_RADIUS_METERS, repo.routes.first().single().audibleRadiusMeters, 1e-12)
     }
 
     @Test

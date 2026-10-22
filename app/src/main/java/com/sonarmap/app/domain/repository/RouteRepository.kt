@@ -43,6 +43,12 @@ interface RouteRepository {
     /** Blank titles are ignored (the previous title stays). */
     suspend fun renameRoute(id: String, title: String)
 
+    /**
+     * Resizes the route's hearing-area corridor, same clamp contract as
+     * [MusicPinRepository.updateAudibleRadius].
+     */
+    suspend fun updateAudibleRadius(id: String, radiusMeters: Double)
+
     /** Empty string detaches the audio file. */
     suspend fun updateAudioAssetUri(id: String, audioAssetUri: String)
 

@@ -257,6 +257,12 @@ class MapViewModel(
         viewModelScope.launch { repository.updateGain(id, gain) }
     }
 
+    /** Resizes the selected pin's hearing area (editor-sheet slider). */
+    fun setPinAudibleRadius(radiusMeters: Double) {
+        val id = selectedPinId.value ?: return
+        viewModelScope.launch { repository.updateAudibleRadius(id, radiusMeters) }
+    }
+
     fun selectAudioFile(uri: String) {
         val id = selectedPinId.value ?: return
         viewModelScope.launch { repository.updateAudioAssetUri(id, uri) }

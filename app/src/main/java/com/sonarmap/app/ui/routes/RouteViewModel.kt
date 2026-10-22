@@ -179,6 +179,12 @@ class RouteViewModel(
         viewModelScope.launch { routeRepository.updateAudioAssetUri(id, uri) }
     }
 
+    /** Resizes the edited route's hearing-area corridor (editor-sheet slider). */
+    fun setRouteAudibleRadius(radiusMeters: Double) {
+        val id = editedRouteId.value ?: return
+        viewModelScope.launch { routeRepository.updateAudibleRadius(id, radiusMeters) }
+    }
+
     fun deleteRoute(routeId: String) {
         if (editedRouteId.value == routeId) editedRouteId.value = null
         viewModelScope.launch { routeRepository.removeRoute(routeId) }

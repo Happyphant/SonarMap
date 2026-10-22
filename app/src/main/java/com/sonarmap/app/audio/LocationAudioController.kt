@@ -5,6 +5,7 @@ import com.sonarmap.app.domain.audio.ProximityGainCalculator
 import com.sonarmap.app.domain.audio.ProximityGainParams
 import com.sonarmap.app.domain.audio.StereoPanCalculator
 import com.sonarmap.app.domain.audio.StereoPanParams
+import com.sonarmap.app.domain.model.MusicPin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.conflate
@@ -27,6 +28,9 @@ import kotlinx.coroutines.launch
  *   point degenerates once the user is ON the line (the nearest point is the
  *   user themselves). The pan is multiplied by clamp(d/panFadeMeters, 0, 1),
  *   centering the sound inside the corridor. null = no fade (pins).
+ * @property audibleRadiusMeters the source's hearing-area radius: the audio is
+ *   silent outside it and enters at EDGE_GAIN floor at its boundary, rising
+ *   towards the source. The map draws exactly this zone around pins/routes.
  */
 data class PositionedSourceAudio(
     val sourceId: String,
@@ -34,6 +38,7 @@ data class PositionedSourceAudio(
     val bearingDegrees: Double?,
     val userGain: Double,
     val panFadeMeters: Double? = null,
+    val audibleRadiusMeters: Double = MusicPin.DEFAULT_AUDIBLE_RADIUS_METERS,
 ) {
     companion object {
         /**
@@ -156,7 +161,7 @@ class LocationAudioController(
                 val distance = active.distanceMeters ?: 0.0
                 effectivePan *= (distance / fadeMeters).coerceIn(0.0, 1.0)
             }
-            val gain = gainCalculator.update(active.distanceMeters, active.userGain)
+            val gain = gainCalculator.update(active.distanceMeters, active.userGain, active.audibleRadiusMeters)
 
             writeGain(gain, lastGain) { lastGain = it }
             writePan(effectivePan, lastPan) { lastPan = it }

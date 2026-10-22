@@ -58,6 +58,8 @@ import com.sonarmap.app.audio.AudioOutputMonitor
 import com.sonarmap.app.audio.LocationAudioController
 import com.sonarmap.app.audio.MediaPlayerAudioEngine
 import com.sonarmap.app.audio.PositionedSourceAudio
+import com.sonarmap.app.map.audibleZonesOf
+import kotlin.math.roundToInt
 import com.sonarmap.app.domain.audio.AudioEngineListener
 import com.sonarmap.app.domain.audio.AudioErrorKind
 import com.sonarmap.app.domain.audio.AudioPlaybackState
@@ -160,6 +162,7 @@ private fun MapScreenContent(
                         bearingDegrees = source?.let { bearingDegrees(fix, it.point) },
                         userGain = 1.0,
                         panFadeMeters = PositionedSourceAudio.ROUTE_PAN_FADE_METERS,
+                        audibleRadiusMeters = route.audibleRadiusMeters,
                     )
                 }
 
@@ -171,6 +174,7 @@ private fun MapScreenContent(
                         distanceMeters = fix?.let { distanceMeters(it, pin.position) },
                         bearingDegrees = fix?.let { bearingDegrees(it, pin.position) },
                         userGain = pin.gain,
+                        audibleRadiusMeters = pin.audibleRadiusMeters,
                     )
                 }
 
@@ -405,6 +409,21 @@ private fun MapScreenContent(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        // Hearing-area layer source: every pin and route paints its zone
+        // (active one filled). Recomputed only when the inputs actually change.
+        val audibleZones = remember(
+            state.pins,
+            state.activePinId,
+            routeState.routes,
+            routeState.activeRouteId,
+        ) {
+            audibleZonesOf(
+                pins = state.pins,
+                activePinId = state.activePinId,
+                routes = routeState.routes,
+                activeRouteId = routeState.activeRouteId,
+            )
+        }
         mapProvider.Content(
             state = MapUiState(
                 markers = state.markers,
@@ -412,6 +431,7 @@ private fun MapScreenContent(
                 cameraTarget = state.cameraTarget,
                 cameraRequestId = state.cameraRequestId,
                 routeLines = routeState.routeLines(),
+                audibleZones = audibleZones,
             ),
             callbacks = callbacks,
             modifier = Modifier.fillMaxSize(),
@@ -519,6 +539,7 @@ private fun MapScreenContent(
                 // the new value up through the state flow.
                 viewModel.setPinGain(gain)
             },
+            onRadiusChange = viewModel::setPinAudibleRadius,
             onPickFile = { audioPicker.launch(arrayOf("audio/*")) },
             onSetActive = { active -> viewModel.setPinActive(pin.id, active) },
             onDelete = viewModel::deleteSelectedPin,
@@ -535,6 +556,7 @@ private fun MapScreenContent(
             isActive = route.id == routeState.activeRouteId,
             onDismiss = routeViewModel::closeEditor,
             onRename = routeViewModel::renameRoute,
+            onRadiusChange = routeViewModel::setRouteAudibleRadius,
             onPickFile = { routeAudioPicker.launch(arrayOf("audio/*")) },
             onSetActive = { active ->
                 routeViewModel.setActiveRoute(if (active) route.id else null)
@@ -612,6 +634,7 @@ private fun PinEditorSheet(
     onDismiss: () -> Unit,
     onRename: (String) -> Unit,
     onGainChange: (Double) -> Unit,
+    onRadiusChange: (Double) -> Unit,
     onPickFile: () -> Unit,
     onSetActive: (Boolean) -> Unit,
     onDelete: () -> Unit,
@@ -679,6 +702,21 @@ private fun PinEditorSheet(
                 )
             }
 
+            // The size of the painted hearing-area circle; the gain curve
+            // follows the same number (floor at the boundary, louder inside).
+            Column {
+                Text(
+                    text = "Область слышимости: ${pin.audibleRadiusMeters.roundToInt()} м",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Slider(
+                    value = pin.audibleRadiusMeters.toFloat().coerceIn(50f, 500f),
+                    onValueChange = { onRadiusChange(it.toDouble().roundToStep()) },
+                    valueRange = 50f..500f,
+                    steps = 44, // 10-meter detents
+                )
+            }
+
             TextButton(
                 onClick = onDelete,
                 colors = ButtonDefaults.textButtonColors(
@@ -699,6 +737,9 @@ private fun formatDistance(distanceMeters: Double?): String = when {
     distanceMeters < 1_000.0 -> "%.0f м".format(distanceMeters)
     else -> "%.1f км".format(distanceMeters / 1_000.0)
 }
+
+/** Snaps a raw slider position to 10-meter detents (fixes FP drift). */
+private fun Double.roundToStep(): Double = (this / 10.0).roundToInt() * 10.0
 
 private fun Context.openAppDetailsSettings() {
     val intent = Intent(

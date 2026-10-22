@@ -1,6 +1,7 @@
 package com.sonarmap.app.data
 
 import com.sonarmap.app.domain.model.GeoPoint
+import com.sonarmap.app.domain.model.MusicPin
 import com.sonarmap.app.domain.model.Route
 import com.sonarmap.app.domain.model.RouteDraft
 import com.sonarmap.app.domain.repository.RouteRepository
@@ -64,6 +65,17 @@ class InMemoryRouteRepository : RouteRepository {
     override suspend fun renameRoute(id: String, title: String): Unit = mutex.withLock {
         if (title.isBlank()) return
         replaceWhere({ it.id == id }) { it.copy(title = title) }
+    }
+
+    override suspend fun updateAudibleRadius(id: String, radiusMeters: Double): Unit = mutex.withLock {
+        replaceWhere({ it.id == id }) {
+            it.copy(
+                audibleRadiusMeters = radiusMeters.coerceIn(
+                    MusicPin.MIN_AUDIBLE_RADIUS_METERS,
+                    MusicPin.MAX_AUDIBLE_RADIUS_METERS,
+                ),
+            )
+        }
     }
 
     override suspend fun updateAudioAssetUri(id: String, audioAssetUri: String): Unit = mutex.withLock {

@@ -10,6 +10,9 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/** One degree of latitude in meters for the IUGG radius used in GeoMath. */
+private const val METERS_PER_DEGREE_LAT = 111_195.0
+
 /**
  * Pure JVM tests: the domain layer refers to no Android classes, so these run
  * without an emulator or Robolectric.
@@ -253,5 +256,77 @@ class GeoMathTest {
             "distances must be ascending, got $distances",
             distances.zipWithNext { a, b -> a <= b }.all { it },
         )
+    }
+
+    @Test
+    fun `zone boundary keeps a constant distance from a straight route`() {
+        val route = Route(
+            id = "r",
+            title = "t",
+            points = listOf(GeoPoint(0.0, 0.0), GeoPoint(0.0, 0.001)), // ~111 m east
+            audioAssetUri = "",
+            createdAt = 0L,
+        )
+        val radius = 100.0
+        val boundary = route.audibleZoneBoundary(radius)
+
+        assertTrue("closed polygon, got ${boundary.size}", boundary.size > 10)
+        // Every boundary point sits one radius away from the polyline
+        // (round caps + straight sides of a corridor make this exact).
+        boundary.forEach { point ->
+            val min = route.segments().minOf { segment ->
+                distanceMeters(point, projectPointToSegment(point, segment))
+            }
+            assertTrue("point $point is $min m from the line", radius - min < 0.5 && min < radius + 0.5)
+        }
+    }
+
+    @Test
+    fun `zone boundary spans the full corridor width`() {
+        val route = Route(
+            id = "r",
+            title = "t",
+            points = listOf(GeoPoint(0.0, 0.0), GeoPoint(0.0, 0.001)),
+            audioAssetUri = "",
+            createdAt = 0L,
+        )
+        val radius = 50.0
+        val lats = route.audibleZoneBoundary(radius).map { it.latitude }
+        // North/south extremes at exactly ±radius around the equator.
+        assertEquals(radius, (lats.max() * METERS_PER_DEGREE_LAT), 1.0)
+        assertEquals(radius, (-lats.min() * METERS_PER_DEGREE_LAT), 1.0)
+    }
+
+    @Test
+    fun `zone boundary tolerates duplicate consecutive points`() {
+        val route = Route(
+            id = "r",
+            title = "t",
+            points = listOf(GeoPoint(0.0, 0.0), GeoPoint(0.0, 0.0), GeoPoint(0.0, 0.001)),
+            audioAssetUri = "",
+            createdAt = 0L,
+        )
+        val boundary = route.audibleZoneBoundary(40.0)
+        // All real (non-cap) offsets stay at the requested radius.
+        boundary.forEach { point ->
+            val min = route.segments().minOf { segment ->
+                distanceMeters(point, projectPointToSegment(point, segment))
+            }
+            assertTrue("point $point is $min m from the line", min >= 40.0 - 1.0 && min <= 40.0 + 1.0)
+        }
+    }
+
+    @Test
+    fun `zone boundary rejects non-positive radius`() {
+        val route = Route(
+            id = "r",
+            title = "t",
+            points = listOf(GeoPoint(0.0, 0.0), GeoPoint(0.0, 0.001)),
+            audioAssetUri = "",
+            createdAt = 0L,
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            route.audibleZoneBoundary(0.0)
+        }
     }
 }
