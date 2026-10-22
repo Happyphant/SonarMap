@@ -44,8 +44,11 @@ Implemented:
   threshold. Degradation: no sensor, no fix, or no headphone-class output
   (wired/BT/USB, `AudioOutputMonitor` via `registerAudioDeviceCallback`) =
   center/mono. `setPan` is a no-op in engines without a spatial stage; the
-  MediaPlayer engine applies the linear pan law `L = gain·min(1, 1−pan)`,
-  `R = gain·min(1, 1+pan)`. ✅ **Verified on device** (Galaxy S24, Redmi
+  MediaPlayer engine shapes channels with the equal-power pan law
+  (`panGains`: θ = (pan+1)·π/4, L = cos θ, R = sin θ, constant total
+  energy L²+R² = 1) so a centered source is never louder than a
+  side-panned one — device-reported loudness imbalance fixed. ✅
+  **Verified on device** (Galaxy S24, Redmi
   Buds 3 Pro over BLE-A2DP): sensor heading within ~2° of the known
   bearing; dead zone held center (relative −2° -> pan −0.000); ~90° left
   turn -> pan glided to +1; ~180° right turn -> full smooth sweep

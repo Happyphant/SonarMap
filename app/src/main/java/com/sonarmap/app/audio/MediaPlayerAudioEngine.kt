@@ -10,6 +10,7 @@ import com.sonarmap.app.domain.audio.AudioEngine
 import com.sonarmap.app.domain.audio.AudioEngineListener
 import com.sonarmap.app.domain.audio.AudioErrorKind
 import com.sonarmap.app.domain.audio.AudioPlaybackState
+import com.sonarmap.app.domain.audio.panGains
 import java.io.IOException
 
 /**
@@ -230,17 +231,15 @@ class MediaPlayerAudioEngine(
     }
 
     /**
-     * Effective per-channel volume = base gain shaped by the linear pan law
-     * `L = min(1, 1 - pan)`, `R = min(1, 1 + pan)`: center plays both
-     * channels at full gain, sides fade the opposite channel to zero
-     * (sum stays constant; the equal-power law is left to HRTF engines).
-     * Reduced to 25% while ducked.
+     * Effective per-channel volume = base gain shaped by the equal-power
+     * pan law (`panGains`): total energy L²+R² stays constant across the
+     * whole pan sweep, so a centered (or behind) source plays at the same
+     * perceived loudness as a side-panned one. Reduced to 25% when ducked.
      */
     private fun applyEffectiveAudio(mp: MediaPlayer) {
         val g = baseGain * if (ducked) 0.25 else 1.0
-        val left = g * (1.0 - pan).coerceAtMost(1.0)
-        val right = g * (1.0 + pan).coerceAtMost(1.0)
-        mp.setVolume(left.toFloat(), right.toFloat())
+        val (leftLaw, rightLaw) = panGains(pan)
+        mp.setVolume((g * leftLaw).toFloat(), (g * rightLaw).toFloat())
     }
 
     private fun releasePlayer() {

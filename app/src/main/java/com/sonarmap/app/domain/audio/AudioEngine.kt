@@ -47,6 +47,10 @@ interface AudioEngine {
      * to playing audio immediately; retained across pause/stop. Engines
      * without a spatial stage may implement this as a no-op, which is the
      * required degradation for missing sensors or missing headphones.
+     *
+     * Channel-shaping convention: engines map pan -> per-channel gains via
+     * [panGains] (equal-power law, constant total energy) so perceived
+     * loudness does not depend on the pan position.
      */
     fun setPan(pan: Double)
 
