@@ -51,7 +51,9 @@ Implemented:
   turn -> pan glided to +1; ~180° right turn -> full smooth sweep
   1.0 → 0.8 → −0.05 (wrap handled) → −1.0; Bluetooth off → pan 0.000
   (mono, heading still live); Bluetooth reconnected → pan resumed without
-  app restart.
+  app restart. Behind-fade re-verified on device: a slow 180° turn passed
+  through the back continuously (−0.2 → −0.09 at the back → −0.5 on the
+  other side → −0.94), no ear flip, no mute/unmute pop.
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
 - Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
   `com.yandex.android:maps.mobile` (lite), play-services-maps + maps-compose
