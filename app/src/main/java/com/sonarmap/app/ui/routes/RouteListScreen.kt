@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -23,31 +24,39 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.sonarmap.app.domain.model.MusicPin
 import com.sonarmap.app.domain.model.Route
 import com.sonarmap.app.ui.audioFileName
+import com.sonarmap.app.ui.map.MapViewModel
 
 /**
- * Routes list. Rows show the feature state inline: idle (empty state),
- * draft indicator (drawing continues on the map), completed vs active
- * badge per route. Tapping a route card closes the list and opens the
- * route editor over the map ("open from the list" means: navigate back
- * first — the editor lives with the map screen); [onOpenMapToDraw]
- * starts a new draft and does the same (drawing happens by hand — map
- * taps only, no routing API).
+ * Shared walking-audio menu: routes AND pins. Rows show the feature state
+ * inline: idle (nothing exists), draft indicator (drawing continues on the
+ * map), completed vs active badge per entry. Tapping a route card closes
+ * the list and opens the route editor over the map; tapping a pin card
+ * does the same with the pin editor — the list has no editor of its own,
+ * the sheet always lives on the map screen. "Новый пин на карте" asks the
+ * map for the placement hint (pins are placed by long-press on the map);
+ * "Новый маршрут на карте" opens a draft and returns to the map (drawing
+ * happens by hand — map taps only, no routing API).
  */
 @Composable
 fun RouteListScreen(
     routeViewModel: RouteViewModel,
+    mapViewModel: MapViewModel,
     onOpenRouteEditor: (String) -> Unit,
+    onOpenPinEditor: (String) -> Unit,
     onOpenMapToDraw: () -> Unit,
+    onOpenMapForPinRequest: () -> Unit,
 ) {
     val state by routeViewModel.uiState.collectAsStateWithLifecycle()
+    val pinsState by mapViewModel.uiState.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     Surface(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.fillMaxSize()) {
-            if (state.routes.isEmpty() && state.draft == null) {
-                // Idle phase: no routes exist yet.
+            if (state.routes.isEmpty() && state.pins.isEmpty() && state.draft == null) {
+                // Idle phase: nothing exists yet at all.
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -56,10 +65,11 @@ fun RouteListScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text("Маршрутов пока нет", style = MaterialTheme.typography.titleMedium)
+                    Text("Маршрутов и меток пока нет", style = MaterialTheme.typography.titleMedium)
                     Text(
                         "Постройте первый маршрут на карте: коснитесь карты в местах, " +
-                            "по которым хотите пройти, и завершите рисование.",
+                            "по которым хотите пройти, и завершите рисование. Метки " +
+                            "ставятся удержанием пальца на карте.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
@@ -69,11 +79,22 @@ fun RouteListScreen(
                     contentPadding = PaddingValues(
                         start = 16.dp,
                         end = 16.dp,
-                        top = 64.dp,
-                        bottom = 96.dp,
+                        top = 32.dp,
+                        bottom = 160.dp,
                     ),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
+                    item(key = "routes-header") {
+                        Text("Маршруты", style = MaterialTheme.typography.titleSmall)
+                    }
+                    if (state.routes.isEmpty()) {
+                        item(key = "routes-empty") {
+                            Text(
+                                "Маршрутов пока нет — постройте первый на карте",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
                     state.draft?.let { draft ->
                         item(key = "draft") {
                             Card {
@@ -96,31 +117,63 @@ fun RouteListScreen(
                             onOpen = { onOpenRouteEditor(route.id) },
                         )
                     }
+
+                    item(key = "pins-header") {
+                        Text("Метки", style = MaterialTheme.typography.titleSmall)
+                    }
+                    if (state.pins.isEmpty()) {
+                        item(key = "pins-empty") {
+                            Text(
+                                "Меток пока нет — удерживайте карту, чтобы поставить",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                    items(pinsState.pins, key = { it.id }) { pin ->
+                        PinCard(
+                            pin = pin,
+                            isActive = pin.id == pinsState.activePinId,
+                            fileName = remember(pin.audioAssetUri) {
+                                audioFileName(context, pin.audioAssetUri)
+                            },
+                            onOpen = { onOpenPinEditor(pin.id) },
+                        )
+                    }
                 }
             }
 
-            Button(
-                onClick = {
-                    // Draft opens in the shared repository; the map screen
-                    // picks it up and shows the drawing banner.
-                    routeViewModel.startDraft()
-                    onOpenMapToDraw()
-                },
+            Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 24.dp),
+                    .padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(if (state.draft == null) "Новый маршрут на карте" else "Продолжить на карте")
-            }
-
-            if (state.draft != null) {
-                TextButton(
-                    onClick = routeViewModel::cancelDraft,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 80.dp),
+                Button(
+                    onClick = {
+                        // Draft opens in the shared repository; the map screen
+                        // picks it up and shows the drawing banner.
+                        routeViewModel.startDraft()
+                        onOpenMapToDraw()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Отменить рисование")
+                    Text(if (state.draft == null) "Новый маршрут на карте" else "Продолжить на карте")
+                }
+
+                OutlinedButton(
+                    onClick = onOpenMapForPinRequest,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Новый пин на карте")
+                }
+
+                if (state.draft != null) {
+                    TextButton(
+                        onClick = routeViewModel::cancelDraft,
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
+                    ) {
+                        Text("Отменить рисование")
+                    }
                 }
             }
         }
@@ -147,11 +200,7 @@ private fun RouteCard(
                 text = "${route.points.size} точек · " +
                     (if (isActive) "активный" else "не активный"),
                 style = MaterialTheme.typography.bodySmall,
-                color = if (isActive) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
+                color = entryStatusColor(isActive),
             )
             Text(
                 text = fileName,
@@ -161,3 +210,37 @@ private fun RouteCard(
         }
     }
 }
+
+@Composable
+private fun PinCard(
+    pin: MusicPin,
+    isActive: Boolean,
+    fileName: String,
+    onOpen: () -> Unit,
+) {
+    Card(
+        onClick = onOpen,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(pin.title, style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = if (isActive) "активная метка" else "метка",
+                style = MaterialTheme.typography.bodySmall,
+                color = entryStatusColor(isActive),
+            )
+            Text(
+                text = fileName,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun entryStatusColor(isActive: Boolean) =
+    if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant

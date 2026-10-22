@@ -2,6 +2,7 @@ package com.sonarmap.app.ui.map
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.sonarmap.app.data.AudioSourceSelector
 import com.sonarmap.app.domain.geo.bearingDegrees
 import com.sonarmap.app.domain.geo.distanceMeters
 import com.sonarmap.app.domain.location.LocationRepository
@@ -29,28 +30,41 @@ enum class LocationNotice {
 /** Single source of truth for the map screen UI. */
 data class MapScreenState(
     val markers: List<MapMarkerUi> = emptyList(),
+    /** All pins, newest last; the list screen renders them directly. */
+    val pins: List<MusicPin> = emptyList(),
     val userLocation: GeoPoint? = null,
+    /** The pin whose editor sheet is open (editing selection only — the
+     *  AUDIO source is [activePin], independent of the sheet). */
     val selectedPin: MusicPin? = null,
     /** Great-circle meters from the current fix to the open pin; null when
-     *  either is unknown. Drives proximity features (audio gain later). */
+     *  either is unknown. Drives the sheet's live distance line. */
     val distanceToSelectedPin: Double? = null,
-    /** Compass bearing user->pin in [0, 360); null when either is unknown.
-     *  Drives stereo pan together with the user heading. */
+    /** Compass bearing user->pin in [0, 360); null when either is unknown. */
     val bearingToSelectedPin: Double? = null,
+    /** The active walking-audio pin (null when a route is active or none). */
+    val activePin: MusicPin? = null,
+    /** Raw id of the active pin (list-screen badges); null = none. */
+    val activePinId: String? = null,
     /** One-shot camera flight request; null when nothing was requested. */
     val cameraTarget: GeoPoint? = null,
     /** Bumped on every flight request so repeats fire despite StateFlow dedup. */
     val cameraRequestId: Int = 0,
     val locationNotice: LocationNotice? = null,
+    /** One-shot user hint requested from another screen; null = nothing. */
+    val mapHint: String? = null,
 )
 
 /**
  * Keeps all pin business logic out of composables. Map interactions arrive
  * through repository calls; the map layer only consumes [MapScreenState].
+ * Route activation crosses over through [AudioSourceSelector]: activating
+ * a pin deactivates the active route, and every activation of a route
+ * clears the active pin.
  */
 class MapViewModel(
     private val repository: MusicPinRepository,
     private val locationRepository: LocationRepository,
+    private val sourceSelector: AudioSourceSelector,
 ) : ViewModel() {
 
     private val selectedPinId = MutableStateFlow<String?>(null)
@@ -63,26 +77,36 @@ class MapViewModel(
 
     private val locationNotice = MutableStateFlow<LocationNotice?>(null)
 
+    /** One-shot hint text for the map screen (e.g. how to drop a pin). */
+    private val mapHint = MutableStateFlow<String?>(null)
+
     /** Whether the user has asked for positioning at least once. */
     private var locationRequested = false
     private var locationJob: Job? = null
+
     /** Set on a FAB press without a known position; consumed by the next fix. */
     private var pendingCameraFlight = false
+
     /** Monotonically increasing flight id — beats StateFlow value dedup. */
     private var cameraSeq = 0
+
     /** Camera centered on the user at least once this process lifetime. */
     private var hasFlown = false
 
     val uiState: StateFlow<MapScreenState> = combine(
         repository.pins,
+        repository.activePinId,
         selectedPinId,
         userLocation,
-        cameraRequest,
-        locationNotice,
-    ) { pins, selectedId, location, camera, notice ->
+        combine(cameraRequest, locationNotice, mapHint) { camera, notice, hint ->
+            Triple(camera, notice, hint)
+        },
+    ) { pins, activeId, selectedId, location, extras ->
+        val (camera, notice, hint) = extras
         val selected = pins.firstOrNull { it.id == selectedId }
         MapScreenState(
             markers = pins.map { MapMarkerUi(id = it.id, position = it.position, title = it.title) },
+            pins = pins,
             userLocation = location,
             selectedPin = selected,
             distanceToSelectedPin = selected?.let { pin ->
@@ -91,9 +115,12 @@ class MapViewModel(
             bearingToSelectedPin = selected?.let { pin ->
                 location?.let { fix -> bearingDegrees(fix, pin.position) }
             },
+            activePin = pins.firstOrNull { it.id == activeId },
+            activePinId = activeId,
             cameraTarget = camera?.target,
             cameraRequestId = camera?.id ?: 0,
             locationNotice = notice,
+            mapHint = hint,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -111,6 +138,24 @@ class MapViewModel(
 
     fun closePinEditor() {
         selectedPinId.value = null
+    }
+
+    /**
+     * Pin activation toggle (the pin audio plays by proximity while active):
+     * a non-null id makes this pin THE active source and deactivates the
+     * active route along with any impression the two could coexist.
+     */
+    fun setPinActive(pinId: String, active: Boolean) {
+        viewModelScope.launch { sourceSelector.selectPin(if (active) pinId else null) }
+    }
+
+    /** Another screen asks the map to explain how a pin is placed. */
+    fun requestPinPlacementHint() {
+        mapHint.value = "Удерживайте карту, чтобы поставить метку"
+    }
+
+    fun consumeMapHint() {
+        mapHint.value = null
     }
 
     // --- location ------------------------------------------------------------

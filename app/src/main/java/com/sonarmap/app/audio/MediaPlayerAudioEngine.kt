@@ -130,7 +130,15 @@ class MediaPlayerAudioEngine(
     }
 
     override fun pause() {
-        if (released || state != AudioPlaybackState.Playing) return
+        if (released || state == AudioPlaybackState.Idle) return
+        // Cancels a queued start too: play() during Preparing only arms
+        // pendingStart, so pausing mid-preparation must disarm it or the
+        // READY callback would start playback that was already withdrawn.
+        if (state == AudioPlaybackState.Preparing) {
+            pendingStart = false
+            return
+        }
+        if (state != AudioPlaybackState.Playing) return
         player?.pause()
         resumeOnFocusGain = false
         transition(AudioPlaybackState.Paused)

@@ -7,7 +7,6 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
-import android.provider.OpenableColumns
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -55,19 +54,18 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.sonarmap.app.audio.ActivePinAudio
 import com.sonarmap.app.audio.AudioOutputMonitor
 import com.sonarmap.app.audio.LocationAudioController
 import com.sonarmap.app.audio.MediaPlayerAudioEngine
-import com.sonarmap.app.data.MusicPinRepositoryProvider
-import com.sonarmap.app.data.RouteRepositoryProvider
+import com.sonarmap.app.audio.PositionedSourceAudio
 import com.sonarmap.app.domain.audio.AudioEngineListener
 import com.sonarmap.app.domain.audio.AudioErrorKind
 import com.sonarmap.app.domain.audio.AudioPlaybackState
+import com.sonarmap.app.domain.geo.bearingDegrees
+import com.sonarmap.app.domain.geo.distanceMeters
+import com.sonarmap.app.domain.geo.projection
 import com.sonarmap.app.domain.model.GeoPoint
 import com.sonarmap.app.domain.model.MusicPin
-import com.sonarmap.app.location.LocationRepositoryProvider
 import com.sonarmap.app.map.MapCallbacks
 import com.sonarmap.app.map.MapProviders
 import com.sonarmap.app.map.MapUiState
@@ -76,26 +74,22 @@ import com.sonarmap.app.ui.audioFileName
 import com.sonarmap.app.ui.routes.RouteEditorSheet
 import com.sonarmap.app.ui.routes.RoutePhase
 import com.sonarmap.app.ui.routes.RouteViewModel
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 
 @Composable
 fun MapScreen(
+    mapViewModel: MapViewModel,
     routeViewModel: RouteViewModel,
     onOpenRoutes: () -> Unit = {},
 ) {
-    // Application context — the repositories themselves are process-wide
-    // singletons; only the location stack needs an Android context.
-    val context = LocalContext.current
-    val viewModel = viewModel {
-        MapViewModel(
-            repository = MusicPinRepositoryProvider.repository,
-            locationRepository = LocationRepositoryProvider.repository(context.applicationContext),
-        )
-    }
-    // routeViewModel comes from the root scope: the map screen and the
-    // routes-list screen must observe the same editor-open state, otherwise
-    // "open from the list" would never surface the sheet on the map.
-    MapScreenContent(viewModel = viewModel, routeViewModel = routeViewModel, onOpenRoutes = onOpenRoutes)
+    // mapViewModel/routeViewModel come from the root scope: the map screen
+    // and the routes-list screens must observe one shared state (editor
+    // sheets, active source). The engine lives with this composition.
+    MapScreenContent(
+        viewModel = mapViewModel,
+        routeViewModel = routeViewModel,
+        onOpenRoutes = onOpenRoutes,
+    )
 }
 
 @Composable
@@ -115,15 +109,11 @@ private fun MapScreenContent(
     // across configuration changes — DisposableEffect disposes the remembered
     // engine whenever this composition leaves).
     val engine = remember { MediaPlayerAudioEngine(context) }
-    var playbackState by remember { mutableStateOf<AudioPlaybackState>(AudioPlaybackState.Idle) }
     var playbackError by remember { mutableStateOf<AudioErrorKind?>(null) }
 
     DisposableEffect(engine) {
         engine.setListener(object : AudioEngineListener {
-            override fun onStateChanged(state: AudioPlaybackState) {
-                // Listener callbacks arrive on the main thread (see engine KDoc).
-                playbackState = state
-            }
+            override fun onStateChanged(state: AudioPlaybackState) = Unit
 
             override fun onError(kind: AudioErrorKind) {
                 playbackError = kind
@@ -135,11 +125,13 @@ private fun MapScreenContent(
         }
     }
 
-    // Proximity loudness + stereo pan: run for the screen's lifetime. Volume
-    // follows the distance from each location fix to the selected pin; pan
-    // follows bearing-to-pin minus user heading (mono-degraded without
-    // headphones or heading sensor). Cancelled with the composition — no
-    // leaks, no blocking.
+    // Proximity loudness + stereo pan: run for the screen's lifetime. The ONE
+    // active source (an active route first, else the active pin; the editor
+    // sheet is irrelevant to the engine) drives the engine: volume follows
+    // the distance from each location fix to the source (for a route — to
+    // the nearest point of its polyline), pan follows bearing-to-source
+    // minus user heading (mono-degraded without headphones or heading
+    // sensor). Cancelled with the composition — no leaks, no blocking.
     val headingSensor = remember { HeadingSensor(context.applicationContext) }
     val audioOutputMonitor = remember(context.applicationContext) {
         AudioOutputMonitor(context.applicationContext)
@@ -148,21 +140,90 @@ private fun MapScreenContent(
         audioOutputMonitor.start()
         onDispose { audioOutputMonitor.stop() }
     }
-    LaunchedEffect(engine, viewModel) {
-        LocationAudioController(engine, trace = { Log.d("SonarGain", it) }).run(
-            activePin = viewModel.uiState.map { state ->
-                state.selectedPin?.let { pin ->
-                    ActivePinAudio(
-                        pinId = pin.id,
-                        distanceMeters = state.distanceToSelectedPin,
-                        bearingDegrees = state.bearingToSelectedPin,
+    LaunchedEffect(engine, viewModel, routeViewModel) {
+        val activeSource = combine(
+            viewModel.uiState,
+            routeViewModel.uiState,
+        ) { map, routes ->
+            val fix = map.userLocation
+            val route = routes.activeRoute()
+            val pin = map.activePin
+            when {
+                route != null -> {
+                    // Route sound: distance/bearing to the NEAREST POINT of
+                    // the polyline; stereo collapses to the center inside
+                    // the corridor (the bearing degenerates on the line).
+                    val source = fix?.let { route.projection(it) }
+                    PositionedSourceAudio(
+                        sourceId = route.id,
+                        distanceMeters = source?.distanceMeters,
+                        bearingDegrees = source?.let { bearingDegrees(fix, it.point) },
+                        userGain = 1.0,
+                        panFadeMeters = PositionedSourceAudio.ROUTE_PAN_FADE_METERS,
+                    )
+                }
+
+                pin != null -> {
+                    // Pin sound: distance/bearing to the pin itself. No fix
+                    // = no distance = full slider loudness, like before.
+                    PositionedSourceAudio(
+                        sourceId = pin.id,
+                        distanceMeters = fix?.let { distanceMeters(it, pin.position) },
+                        bearingDegrees = fix?.let { bearingDegrees(it, pin.position) },
                         userGain = pin.gain,
                     )
                 }
-            },
+
+                else -> null // nothing active: the controller silences
+            }
+        }
+        LocationAudioController(engine, trace = { Log.d("SonarGain", it) }).run(
+            activePin = activeSource,
             heading = headingSensor.heading(),
             headphones = audioOutputMonitor.headphonesConnected,
         )
+    }
+
+    // The active source starts playing AS SOON AS it is activated (auto-play,
+    // no Прослушать button anywhere) with looped playback; switching or
+    // deactivating pauses the previous stream. The key covers the source AND
+    // its file: re-picking the file restarts the prepared stream. Do not
+    // touch anything here on sheet open/close — sound survives sheets.
+    val activeAudioKey: Pair<String, String>? = when {
+        routeState.activeRoute()?.audioAssetUri?.isNotBlank() == true ->
+            routeState.activeRoute()!!.id to routeState.activeRoute()!!.audioAssetUri
+
+        state.activePin?.audioAssetUri?.isNotBlank() == true ->
+            state.activePin!!.id to state.activePin!!.audioAssetUri
+
+        else -> null
+    }
+    LaunchedEffect(activeAudioKey) {
+        val (_, uri) = activeAudioKey ?: return@LaunchedEffect engine.pause()
+        playbackError = null
+        engine.prepare(uri)
+        engine.play()
+    }
+
+    // One-shot hints requested from other screens (e.g. the pin placement
+    // hint from the routes list) share the snackbar host with notices.
+    LaunchedEffect(state.mapHint) {
+        state.mapHint?.let { hint ->
+            snackbarHostState.showSnackbar(hint, duration = SnackbarDuration.Short)
+            viewModel.consumeMapHint()
+        }
+    }
+
+    // Playback failures surface as a transient snackbar (no in-sheet audio
+    // controls anymore); the location notice regains the host afterwards.
+    LaunchedEffect(playbackError) {
+        val message = when (playbackError) {
+            AudioErrorKind.UriUnavailable -> "Аудиофайл недоступен"
+            AudioErrorKind.UnsupportedFormat -> "Формат не поддерживается"
+            AudioErrorKind.AudioFocusLost -> "Звук прерван другим приложением"
+            null -> return@LaunchedEffect
+        }
+        snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short)
     }
 
     val audioPicker = rememberLauncherForActivityResult(
@@ -282,10 +343,18 @@ private fun MapScreenContent(
         text to action
     } ?: (null as String?) to (null as String?)
 
+    // The indefinite notice replaces what is on screen ONLY when a notice is
+    // actually present (or just cleared): on a plain screen entry it must not
+    // snuff out a one-shot hint snackbar shown at the same moment.
+    val hadNotice = remember { mutableStateOf<String?>(null) }
     LaunchedEffect(noticeText) {
-        // An Indefinite snackbar never finishes on its own: dismiss whatever
-        // is on screen so the queued notice (or a clearing) can proceed.
-        snackbarHostState.currentSnackbarData?.dismiss()
+        val wasNotice = hadNotice.value
+        hadNotice.value = noticeText
+        if (wasNotice != null) {
+            // A notice WAS on screen: dismiss whatever is there so the queued
+            // notice (or a clearing) can proceed.
+            snackbarHostState.currentSnackbarData?.dismiss()
+        }
         if (noticeText == null) {
             return@LaunchedEffect
         }
@@ -377,7 +446,15 @@ private fun MapScreenContent(
                 .align(Alignment.TopStart)
                 .padding(start = 16.dp, top = 48.dp),
         ) {
-            Text(if (routeState.routes.isEmpty()) "Маршруты" else "Маршруты (${routeState.routes.size})")
+            val total = routeState.routes.size + routeState.pins.size
+            Text(
+                when {
+                    total == 0 -> "Маршруты и метки"
+                    routeState.pins.isEmpty() -> "Маршруты ($total)"
+                    routeState.routes.isEmpty() -> "Метки ($total)"
+                    else -> "Маршруты и метки ($total)"
+                },
+            )
         }
 
         // Phase Idle entry point: start a new hand-drawn route.
@@ -429,15 +506,11 @@ private fun MapScreenContent(
     }
 
     state.selectedPin?.let { pin ->
-        // Fresh selection: reset the error, rewind, and (re)prepare the source.
-        LaunchedEffect(pin.id, pin.audioAssetUri) {
-            playbackError = null
-            if (pin.audioAssetUri.isNotBlank()) engine.prepare(pin.audioAssetUri)
-        }
         PinEditorSheet(
             pin = pin,
             fileName = remember(pin.audioAssetUri) { audioFileName(context, pin.audioAssetUri) },
             distanceToPin = state.distanceToSelectedPin,
+            isActive = pin.id == state.activePin?.id,
             onDismiss = viewModel::closePinEditor,
             onRename = viewModel::renamePin,
             onGainChange = { gain ->
@@ -447,20 +520,8 @@ private fun MapScreenContent(
                 viewModel.setPinGain(gain)
             },
             onPickFile = { audioPicker.launch(arrayOf("audio/*")) },
+            onSetActive = { active -> viewModel.setPinActive(pin.id, active) },
             onDelete = viewModel::deleteSelectedPin,
-            hasAudioFile = pin.audioAssetUri.isNotBlank(),
-            playbackState = playbackState,
-            playbackError = playbackError,
-            onTogglePlayback = {
-                playbackError = null
-                // The button is a genuine toggle: Pause stops the playing source,
-                // otherwise play() handles Ready/Paused/Preparing/auto-resume.
-                if (playbackState == AudioPlaybackState.Playing) {
-                    engine.pause()
-                } else {
-                    engine.play()
-                }
-            },
         )
     }
 
@@ -547,15 +608,13 @@ private fun PinEditorSheet(
     pin: MusicPin,
     fileName: String,
     distanceToPin: Double?,
-    hasAudioFile: Boolean,
-    playbackState: AudioPlaybackState,
-    playbackError: AudioErrorKind?,
+    isActive: Boolean,
     onDismiss: () -> Unit,
     onRename: (String) -> Unit,
     onGainChange: (Double) -> Unit,
     onPickFile: () -> Unit,
+    onSetActive: (Boolean) -> Unit,
     onDelete: () -> Unit,
-    onTogglePlayback: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -591,44 +650,21 @@ private fun PinEditorSheet(
                 )
             }
 
-            // Local preview listen-back; enabled only for a real prepared file.
+            // Activation is the audio control: an active pin's sound plays
+            // immediately, looped, with proximity loudness and stereo pan.
+            // Closing this sheet never touches the sound.
             Row(
-                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                OutlinedButton(
-                    onClick = onTogglePlayback,
-                    enabled = hasAudioFile &&
-                        playbackState !is AudioPlaybackState.Preparing &&
-                        playbackState !is AudioPlaybackState.Idle,
-                ) {
-                    val label = when (playbackState) {
-                        AudioPlaybackState.Playing -> "⏸ Пауза"
-                        else -> "▶ Прослушать"
-                    }
-                    Text(label)
-                }
-                when (playbackError) {
-                    AudioErrorKind.UriUnavailable ->
-                        Text(
-                            "Файл недоступен",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    AudioErrorKind.UnsupportedFormat ->
-                        Text(
-                            "Формат не поддерживается",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    AudioErrorKind.AudioFocusLost ->
-                        Text(
-                            "Воспроизведение прервано (занято другим приложением)",
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    null -> Unit
-                }
+                TextButton(
+                    onClick = { onSetActive(false) },
+                    enabled = isActive,
+                ) { Text("Снять активность") }
+                TextButton(
+                    onClick = { onSetActive(true) },
+                    enabled = !isActive,
+                ) { Text("Сделать активным") }
             }
 
             Column {

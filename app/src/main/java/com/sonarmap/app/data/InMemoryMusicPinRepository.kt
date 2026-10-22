@@ -20,6 +20,9 @@ class InMemoryMusicPinRepository : MusicPinRepository {
     private val _pins = MutableStateFlow<List<MusicPin>>(emptyList())
     override val pins: StateFlow<List<MusicPin>> = _pins.asStateFlow()
 
+    private val _activePinId = MutableStateFlow<String?>(null)
+    override val activePinId: StateFlow<String?> = _activePinId.asStateFlow()
+
     private val mutex = Mutex()
 
     override suspend fun addPin(position: GeoPoint, defaultTitle: String): MusicPin =
@@ -51,6 +54,14 @@ class InMemoryMusicPinRepository : MusicPinRepository {
 
     override suspend fun removePin(id: String): Unit = mutex.withLock {
         _pins.value = _pins.value.filterNot { it.id == id }
+        if (_activePinId.value == id) _activePinId.value = null
+    }
+
+    override suspend fun setActivePin(id: String?): Unit = mutex.withLock {
+        if (id != null && _pins.value.none { it.id == id }) {
+            throw IllegalArgumentException("unknown pin id: $id")
+        }
+        _activePinId.value = id
     }
 
     private inline fun replaceWhere(

@@ -4,6 +4,7 @@ import com.sonarmap.app.domain.model.GeoPoint
 import com.sonarmap.app.domain.model.MusicPin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -90,5 +91,39 @@ class InMemoryMusicPinRepositoryTest {
         repo.removePin("ghost")
 
         assertEquals(listOf(pin), repo.pins.first())
+    }
+
+    @Test
+    fun `setActivePin selects and deselects`() = runBlocking {
+        val repo = InMemoryMusicPinRepository()
+        val pin = repo.addPin(moscow, defaultTitle = "")
+        assertNull(repo.activePinId.first())
+
+        repo.setActivePin(pin.id)
+        assertEquals(pin.id, repo.activePinId.first())
+
+        repo.setActivePin(null)
+        assertNull(repo.activePinId.first())
+    }
+
+    @Test
+    fun `setActivePin rejects an unknown id`() = runBlocking {
+        val repo = InMemoryMusicPinRepository()
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            runBlocking { repo.setActivePin("ghost") }
+        }
+        assertTrue(error.message!!.contains("ghost"))
+    }
+
+    @Test
+    fun `removePin clears the active selection`() = runBlocking {
+        val repo = InMemoryMusicPinRepository()
+        val pin = repo.addPin(moscow, defaultTitle = "")
+        repo.setActivePin(pin.id)
+
+        repo.removePin(pin.id)
+
+        assertTrue(repo.pins.first().isEmpty())
+        assertNull(repo.activePinId.first())
     }
 }

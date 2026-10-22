@@ -196,6 +196,38 @@ class GeoMathTest {
         assertTrue(nearestSegments(locationAt(0.0, 0.5), route, 0).isEmpty())
     }
 
+    // ---------- Route.projection ----------
+
+    @Test
+    fun `projection projects onto the nearest segment interior`() {
+        // Midpoint between vertices: the foot is the user's own longitude on
+        // the equator; segment 1 (equator 0..1) is the closest.
+        val projection = routeOnEquator().projection(GeoPoint(0.001, 0.5))
+        val expected = degDistance * 0.001
+        assertEquals(0.0, projection.point.latitude, 1e-9)
+        assertEquals(0.5, projection.point.longitude, 1e-6)
+        assertEquals(expected, projection.distanceMeters, 1.0)
+        assertEquals(0, projection.segmentIndex)
+    }
+
+    @Test
+    fun `projection clamps to the endpoint when beyond the route`() {
+        // South-west of the very first vertex: the foot is the vertex itself.
+        val projection = routeOnEquator().projection(GeoPoint(-0.001, -0.001))
+        assertEquals(GeoPoint(0.0, 0.0), projection.point)
+        val d = distanceMeters(GeoPoint(-0.001, -0.001), GeoPoint(0.0, 0.0))
+        assertEquals(d, projection.distanceMeters, 1e-9)
+        assertEquals(0, projection.segmentIndex)
+    }
+
+    @Test
+    fun `projection near a later segment reports that segment`() {
+        val projection = routeOnEquator().projection(GeoPoint(0.0, 2.5))
+        assertEquals(2.5, projection.point.longitude, 1e-6)
+        assertEquals(0.0, projection.distanceMeters, 1e-9)
+        assertEquals(2, projection.segmentIndex) // foot on segment (2..3)
+    }
+
     @Test
     fun `route requires at least two points`() {
         // Completed-route domain contract: a route is walkable sequence of

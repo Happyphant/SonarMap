@@ -14,6 +14,13 @@ interface MusicPinRepository {
     val pins: StateFlow<List<MusicPin>>
 
     /**
+     * The pin the proximity audio follows (the "active" source), null = none.
+     * At most one pin AND zero routes are active — the cross-repository
+     * exclusivity lives in [com.sonarmap.app.data.AudioSourceSelector].
+     */
+    val activePinId: StateFlow<String?>
+
+    /**
      * Creates a pin with a generated id, [com.sonarmap.app.domain.model.MusicPin.DEFAULT_PIN_GAIN]
      * gain (0.7) and no audio yet.
      * @param defaultTitle used when the caller has nothing better (UI supplies "Пин N")
@@ -29,5 +36,15 @@ interface MusicPinRepository {
     /** Empty string detaches the audio file. */
     suspend fun updateAudioAssetUri(id: String, audioAssetUri: String)
 
+    /**
+     * Removes the pin. If it was the active one, the selection clears —
+     * there is no "active pin pointing at nothing" state.
+     */
     suspend fun removePin(id: String)
+
+    /**
+     * Selects the proximity-audio pin; null deselects.
+     * @throws IllegalArgumentException for a non-null id of an unknown pin.
+     */
+    suspend fun setActivePin(id: String?)
 }

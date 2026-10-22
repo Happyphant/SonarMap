@@ -11,25 +11,45 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 
 /**
- * The pin the user selected on the map, expressed as everything the
- * proximity gain and stereo pan need: identity (to detect switches), the
- * live distance and bearing recomputed per location tick, and the pin's
- * own slider loudness.
+ * The active walking-audio source (a pin OR a route) expressed as everything
+ * the proximity gain and stereo pan need: identity (to detect switches), the
+ * live distance and bearing recomputed per location tick, and the source's
+ * own loudness.
  *
- * @property distanceMeters null = no fix yet (or no pin selected upstream)
- * @property bearingDegrees compass bearing user->pin in [0, 360), null when
- *   either position is unknown
+ * @property distanceMeters null = no fix yet (or nothing active upstream);
+ *   for a route this is the distance to the nearest point of the polyline
+ * @property bearingDegrees compass bearing user->source in [0, 360), null
+ *   when either position is unknown; for a route it points at the projected
+ *   point on the line
+ * @property userGain the source's own loudness (pin slider; routes play at 1.0)
+ * @property panFadeMeters route-only: the stereo image collapses towards the
+ *   center as the user approaches the line — the bearing to the projected
+ *   point degenerates once the user is ON the line (the nearest point is the
+ *   user themselves). The pan is multiplied by clamp(d/panFadeMeters, 0, 1),
+ *   centering the sound inside the corridor. null = no fade (pins).
  */
-data class ActivePinAudio(
-    val pinId: String,
+data class PositionedSourceAudio(
+    val sourceId: String,
     val distanceMeters: Double?,
     val bearingDegrees: Double?,
     val userGain: Double,
-)
+    val panFadeMeters: Double? = null,
+) {
+    companion object {
+        /**
+         * Corridor half-width for route sources: inside this radius from the
+         * line the pan collapses towards the center (both ears), because the
+         * bearing to the nearest line point degenerates as the user walks
+         * onto the route. Outside it, the pan is fully directional.
+         */
+        const val ROUTE_PAN_FADE_METERS = 15.0
+    }
+}
 
 /**
- * Bridges the location and sensor layers to the [AudioEngine]:
- * - volume of the active pin follows distance (see [ProximityGainCalculator]);
+ * Bridges the location and sensor layers to the [AudioEngine] for the ONE
+ * currently active audio source (a pin or an active route):
+ * - volume follows distance (see [ProximityGainCalculator]);
  * - stereo pan follows the relative angle bearing−heading
  *   (see [StereoPanCalculator]), degraded to center (0) when there is no
  *   heading sensor or no headphone-class output.
@@ -43,11 +63,13 @@ data class ActivePinAudio(
  *
  * Ownership rules:
  * - This controller is the ONLY writer of engine volume and pan while
- *   running; UI sliders change the pin's stored gain, which arrives
+ *   running; UI sliders change the source's stored gain, which arrives
  *   through the flow — no competing direct engine calls.
- * - A null [ActivePinAudio] (sheet closed / nothing selected) silences and
- *   centers the engine, resetting both state machines.
- * - A pin switch resets both state machines: no loudness or stereo memory
+ * - A null source (deactivation) silences and centers the engine, resetting
+ *   both state machines. Note: this is about ACTIVATION, not about which
+ *   editor sheet is open — closing a sheet of an active source keeps the
+ *   sound playing.
+ * - A source switch resets both state machines: no loudness or stereo memory
  *   crosses between different sound sources.
  */
 class LocationAudioController(
@@ -68,18 +90,19 @@ class LocationAudioController(
 
     /**
      * Runs until cancelled (screen exit — the caller's LaunchedEffect).
-     * @param activePin stream of the currently selected pin's audio inputs
+     * @param activePin stream of the active source's audio inputs (a pin or
+     *   a route; null = deactivated — the engine is silenced)
      * @param heading compass heading of the user in [0, 360), null = sensor
      *   unavailable (mono degradation)
      * @param headphones true when a headphone-class output is connected;
      *   false = mono degradation
      */
     suspend fun run(
-        activePin: Flow<ActivePinAudio?>,
+        activePin: Flow<PositionedSourceAudio?>,
         heading: Flow<Double?>,
         headphones: Flow<Boolean>,
     ) = coroutineScope {
-        var latestPin: ActivePinAudio? = null
+        var latestPin: PositionedSourceAudio? = null
         var latestHeading: Double? = null
         var latestHeadphones: Boolean = false
 
@@ -88,8 +111,10 @@ class LocationAudioController(
         var lastGain: Double? = null
         var lastPan: Double? = null
 
-        /** One processing tick: every source emission lands here; the
-         *  timestamp throttle decides whether it reaches the engine. */
+        /**
+         * One processing tick: every source emission lands here; the
+         * timestamp throttle decides whether it reaches the engine.
+         */
         fun process() {
             val now = nowMillis()
             if (lastWriteMillis != Long.MIN_VALUE &&
@@ -103,9 +128,9 @@ class LocationAudioController(
             val headingDegrees = latestHeading
             val onHeadphones = latestHeadphones
 
-            val pinChanged = active?.pinId != currentPinId
-            if (pinChanged) {
-                currentPinId = active?.pinId
+            val sourceChanged = active?.sourceId != currentPinId
+            if (sourceChanged) {
+                currentPinId = active?.sourceId
                 gainCalculator.reset()
                 panCalculator.reset()
                 lastGain = null
@@ -115,21 +140,28 @@ class LocationAudioController(
             if (active == null) {
                 writeGain(0.0, lastGain) { lastGain = it }
                 writePan(0.0, lastPan) { lastPan = it }
-                trace("no active pin -> volume 0, pan 0")
+                trace("no active source -> volume 0, pan 0")
                 return
             }
 
-            val effectivePan = if (onHeadphones) {
+            var effectivePan = if (onHeadphones) {
                 panCalculator.update(active.bearingDegrees, headingDegrees)
             } else {
                 panCalculator.update(null, null) // speakers: mono degradation
+            }
+            // Route corridor: near the line (bearing to the projected point
+            // degenerates there) collapse the stereo image to the center.
+            // Pins have no fade (null) and keep the exact directional pan.
+            active.panFadeMeters?.let { fadeMeters ->
+                val distance = active.distanceMeters ?: 0.0
+                effectivePan *= (distance / fadeMeters).coerceIn(0.0, 1.0)
             }
             val gain = gainCalculator.update(active.distanceMeters, active.userGain)
 
             writeGain(gain, lastGain) { lastGain = it }
             writePan(effectivePan, lastPan) { lastPan = it }
             trace(
-                "pin=${active.pinId} " +
+                "source=${active.sourceId} " +
                     "d=${active.distanceMeters?.let { "%.1f".format(it) } ?: "null"} " +
                     "brg=${active.bearingDegrees?.let { "%.1f".format(it) } ?: "null"} " +
                     "hdg=${headingDegrees?.let { "%.1f".format(it) } ?: "null"} " +

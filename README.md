@@ -90,6 +90,48 @@ Implemented:
   via "Снять" works; a map tap while idle creates nothing; polyline tap
   opens the editor (verified: "Маршрут 2" sheet after tapping the line),
   card tap in the list closed the list and landed the same sheet on the map.
+- Unified walking-audio activation — one active audio source at a time.
+  A pin OR a route becomes the audible source (`AudioSourceSelector`:
+  activating a pin deactivates the active route and vice versa; `null`
+  deactivation touches only its own side; both repositories keep their own
+  `activePinId`/`activeRouteId` StateFlow and reject unknown ids). The
+  "Прослушать" button is gone — the pin editor sheet has
+  "Сделать активным"/"Снять активность" like the route editor, and the
+  active source's sound starts immediately on activation (auto-play of a
+  looped stream; pause on deactivation/switch) with no sheet involvement:
+  closing or reopening the editor sheet of an active source never silences
+  it — audio is owned by the activation state alone. Route sound is
+  proximity-driven along the line: each fix is projected onto the polyline
+  (`Route.projection`, nearest point + distance), gain is
+  `clamp(1 − d/150) × 1.0` (uniform along the line for parallel walks; the
+  ends fade acoustically because no point lies beyond them), pan targets
+  the projected point; inside a 15 m corridor the stereo image collapses to
+  the center (`panFadeMeters` in `PositionedSourceAudio`), because the
+  bearing to the nearest line point degenerates once the user is ON the
+  line. Playback errors surface as a transient snackbar. MVP deviation from
+  the spatial-audio skill guidance (several virtual sources along a route):
+  MediaPlayer is a single-stream engine, so one stream is anchored at the
+  nearest projected polyline point — this preserves the "nearest source
+  wins" semantics without a multi-stream mixer (revisit with
+  FMOD/Resonance after the MVP). Menu: the top-left map button reads
+  "Маршруты и метки (N)" and the menu now lists pins in a "Метки" section
+  (title, active badge, audio file; card tap closes the list and opens the
+  pin editor on the map) plus "Новый пин на карте", which returns to the
+  map with a one-shot hint snackbar ("Удерживайте карту, чтобы поставить
+  метку") — pin placement stays a map long-press. Both ViewModels (map +
+  routes) are root-scoped and share the selector.
+  ✅ **Verified on device** (Galaxy S24, speaker): pin activation -> sound
+  immediately (SonarGain: `gain = (1 − d/150) × slider` at d = 41 m -> 0.509
+  with the 70% slider); closing the sheet kept the sound; activating a
+  route switched the engine source within one tick (pin 0.509 -> route
+  projection d = 206 m -> gain 0.0, bearing to the projected point 156°);
+  activating the pin back silenced the route and restored the pin stream;
+  chip "Снять" and both sheets' activation toggles go through the same
+  selector; the hint snackbar shows exactly once after "Новый пин на
+  карте" (a notice-vs-hint snackbar race was fixed on the way); menu
+  labels update with entity counts ("Маршруты и метки (2)" with both);
+  the idle gray route line still opens its editor by tap while a pin's
+  sound keeps playing.
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
 - Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
   `com.yandex.android:maps.mobile` (lite), play-services-maps + maps-compose

@@ -127,3 +127,39 @@ private data class RankedSegment(
     val segment: RouteSegment,
     val distanceMeters: Double,
 )
+
+/**
+ * Nearest-point projection of a position onto a route polyline:
+ * everything route-sound needs (distance for the proximity gain, the
+ * projected point for the stereo bearing, segment index for tracing).
+ *
+ * @property point the closest point of the route (a vertex or a foot on a segment)
+ * @property distanceMeters great-circle distance position -> [point]
+ * @property segmentIndex which segment owns the projection (ties -> lowest index)
+ */
+data class RouteProjection(
+    val point: GeoPoint,
+    val distanceMeters: Double,
+    val segmentIndex: Int,
+)
+
+/**
+ * The closest point of the whole route to [position]: one pass over the
+ * segments, keeping the best (distance, segmentIndex) pair. A route has at
+ * least two points by its own contract, so at least one segment exists.
+ */
+fun Route.projection(position: GeoPoint): RouteProjection {
+    var bestPoint: GeoPoint = points.first()
+    var bestDistance = Double.MAX_VALUE
+    var bestIndex = 0
+    segments().forEachIndexed { index, segment ->
+        val foot = projectPointToSegment(position, segment)
+        val distance = distanceMeters(position, foot)
+        if (distance < bestDistance) {
+            bestPoint = foot
+            bestDistance = distance
+            bestIndex = index
+        }
+    }
+    return RouteProjection(bestPoint, bestDistance, bestIndex)
+}
