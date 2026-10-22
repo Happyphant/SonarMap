@@ -23,8 +23,10 @@ import com.sonarmap.app.domain.model.Route
 
 /**
  * Editor for one saved route — rename, attach a local audio file, make it
- * the active walk route, or delete it. Shared by the map screen (opens
- * right after Завершить) and the routes list (opens on a row tap).
+ * the active walk route, or delete it. Rendered by the map screen, which is
+ * its only host: it opens right after Завершить, when a saved route
+ * polyline is tapped, or when a route is opened from the routes list
+ * (the list closes and navigates back to the map first).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

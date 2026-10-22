@@ -29,13 +29,16 @@ import com.sonarmap.app.ui.audioFileName
 /**
  * Routes list. Rows show the feature state inline: idle (empty state),
  * draft indicator (drawing continues on the map), completed vs active
- * badge per route. A route is edited in [RouteEditorSheet]; "Новый
- * маршрут" jumps back to the map with a draft already open (drawing
- * happens by hand — map taps only, no routing API).
+ * badge per route. Tapping a route card closes the list and opens the
+ * route editor over the map ("open from the list" means: navigate back
+ * first — the editor lives with the map screen); [onOpenMapToDraw]
+ * starts a new draft and does the same (drawing happens by hand — map
+ * taps only, no routing API).
  */
 @Composable
 fun RouteListScreen(
     routeViewModel: RouteViewModel,
+    onOpenRouteEditor: (String) -> Unit,
     onOpenMapToDraw: () -> Unit,
 ) {
     val state by routeViewModel.uiState.collectAsStateWithLifecycle()
@@ -90,7 +93,7 @@ fun RouteListScreen(
                             fileName = remember(route.audioAssetUri) {
                                 audioFileName(context, route.audioAssetUri)
                             },
-                            onOpen = { routeViewModel.openEditor(route.id) },
+                            onOpen = { onOpenRouteEditor(route.id) },
                         )
                     }
                 }

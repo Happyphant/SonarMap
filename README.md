@@ -76,12 +76,20 @@ Implemented:
   Domain: `Route`, `RouteSegment`, `RouteDraft`, `Route.totalLengthMeters()`.
   No map-provider routing API is called anywhere: routes are built by hand
   (polyline rendering is map display, ambient `MapUiState.routeLines`).
+  The route editor opens by tapping a saved route polyline on the map
+  (the drawing draft stays tap-through: mid-drawing taps keep adding
+  vertices, and clicking a line opens the editor for that route); opening
+  a route from the routes list closes the list first — the editor sheet
+  always lives on the map screen, backed by the single root-scoped
+  RouteViewModel shared by both destinations.
   ✅ **Verified on device** (Yandex MapKit adapter): the full cycle —
   3-tap draft ("2 точки" counter, Завершить disabled at 0), finished
   route showed "3 точки · 236 м · не активный", longtone.wav attached
   through SAF, activation turned the line teal and raised the chip; the
   list card showed title, points, audio name and the active flag; deselect
-  via "Снять" works; a map tap while idle creates nothing.
+  via "Снять" works; a map tap while idle creates nothing; polyline tap
+  opens the editor (verified: "Маршрут 2" sheet after tapping the line),
+  card tap in the list closed the list and landed the same sheet on the map.
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
 - Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
   `com.yandex.android:maps.mobile` (lite), play-services-maps + maps-compose

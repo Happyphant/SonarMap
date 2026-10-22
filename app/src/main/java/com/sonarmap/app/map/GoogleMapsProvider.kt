@@ -91,11 +91,15 @@ class GoogleMapsProvider : MapProvider {
             }
 
             // Route polylines; draft vertices get small filled circles so
-            // individual taps are visible while drawing.
+            // individual taps are visible while drawing. Saved routes are
+            // clickable and report the domain route id; the draft stays
+            // tap-through so taps keep adding vertices.
             state.routeLines.forEach { line ->
                 if (line.points.size >= 2) {
                     Polyline(
                         points = line.points.map { it.toLatLng() },
+                        clickable = !line.isDraft,
+                        onClick = { callbacks.onRouteClick(line.id) },
                         color = line.lineColor(),
                         width = line.lineWidth(),
                     )

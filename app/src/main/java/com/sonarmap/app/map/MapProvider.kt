@@ -51,11 +51,15 @@ data class RouteLineUi(
  * [onMapClick] fires on a plain map tap without any marker hit; the app
  * layer decides what it means (route vertices during drawing, ignored
  * otherwise) — the map layer itself stays policy-free.
+ * [onRouteClick] fires when a saved route polyline is tapped (never for
+ * the drawing draft); the app layer decides the consequence (route
+ * editor) — adapters must only report the domain route id.
  */
 interface MapCallbacks {
     fun onMapClick(position: GeoPoint)
     fun onMapLongClick(position: GeoPoint)
     fun onMarkerClick(markerId: String)
+    fun onRouteClick(routeId: String)
     fun onMyLocationClick()
 }
 

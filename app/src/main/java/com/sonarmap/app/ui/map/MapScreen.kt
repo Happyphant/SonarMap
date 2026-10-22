@@ -79,7 +79,10 @@ import com.sonarmap.app.ui.routes.RouteViewModel
 import kotlinx.coroutines.flow.map
 
 @Composable
-fun MapScreen(onOpenRoutes: () -> Unit = {}) {
+fun MapScreen(
+    routeViewModel: RouteViewModel,
+    onOpenRoutes: () -> Unit = {},
+) {
     // Application context — the repositories themselves are process-wide
     // singletons; only the location stack needs an Android context.
     val context = LocalContext.current
@@ -89,9 +92,9 @@ fun MapScreen(onOpenRoutes: () -> Unit = {}) {
             locationRepository = LocationRepositoryProvider.repository(context.applicationContext),
         )
     }
-    val routeViewModel = viewModel {
-        RouteViewModel(repository = RouteRepositoryProvider.repository)
-    }
+    // routeViewModel comes from the root scope: the map screen and the
+    // routes-list screen must observe the same editor-open state, otherwise
+    // "open from the list" would never surface the sheet on the map.
     MapScreenContent(viewModel = viewModel, routeViewModel = routeViewModel, onOpenRoutes = onOpenRoutes)
 }
 
@@ -319,6 +322,15 @@ private fun MapScreenContent(
             }
 
             override fun onMarkerClick(markerId: String) = viewModel.openPinEditor(markerId)
+
+            override fun onRouteClick(routeId: String) {
+                // Saved routes open the route editor on tap — except while
+                // drawing, where the tap must keep adding vertices instead.
+                if (routeViewModel.uiState.value.draft == null) {
+                    routeViewModel.openEditor(routeId)
+                }
+            }
+
             override fun onMyLocationClick() = viewModel.onMyLocationClick()
         }
     }

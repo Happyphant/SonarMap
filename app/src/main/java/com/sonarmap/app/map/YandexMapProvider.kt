@@ -138,6 +138,19 @@ class YandexMapProvider : MapProvider {
             java.lang.ref.WeakReference<MapObjectTapListener>(pinTapListener)
         }
 
+        val routeTapListener = remember(mapView) {
+            object : MapObjectTapListener {
+                override fun onMapObjectTap(mapObject: MapObject, point: Point): Boolean {
+                    // userData carries the domain route id; drafts never get a listener.
+                    (mapObject.userData as? String)?.let(currentCallbacks::onRouteClick)
+                    return true // handled: the event must not reach the plain map handler
+                }
+            }
+        }
+        val routeTapRef = remember(mapView, routeTapListener) {
+            java.lang.ref.WeakReference<MapObjectTapListener>(routeTapListener)
+        }
+
         // Full resync of map objects on every state change — the marker count for
         // the MVP is tiny, so rebuilding is simpler and has no stale-object races.
         LaunchedEffect(
@@ -170,6 +183,12 @@ class YandexMapProvider : MapProvider {
                     )
                     polyline.setStrokeColor(line.colorArgb())
                     polyline.setStrokeWidth(line.strokeWidth())
+                    if (!line.isDraft) {
+                        // Saved routes open the editor on tap; the drawing draft
+                        // stays tap-through so taps keep adding vertices.
+                        polyline.userData = line.id
+                        polyline.addTapListener(routeTapRef)
+                    }
                 }
                 if (line.isDraft) {
                     line.points.forEach { point ->

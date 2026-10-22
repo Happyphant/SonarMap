@@ -131,7 +131,12 @@ class RouteViewModel(
         }
     }
 
+    /**
+     * Opens the editor for a saved route. Unknown ids (deleted routes, the
+     * "draft" pseudo-id tapped on the map) are ignored — nothing opens.
+     */
     fun openEditor(routeId: String) {
+        if (uiState.value.routes.none { it.id == routeId }) return
         editedRouteId.value = routeId
     }
 
