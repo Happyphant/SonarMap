@@ -34,17 +34,17 @@ Implemented:
   (Galaxy S24, unlocked screen): trace matched the formula to 3 decimals
   on a ~260 m out-and-back walk, silence inside the dead zone, no pops.
 - Stereo positioning of the active pin: relative angle
-  `relative = normalize(bearingToPin − userHeading)` drives pan
-  `pan = sign·clamp((|relative| − 10°)/(90° − 10°), 0, 1)` with EMA
-  smoothing 0.3 per tick and a ±10° dead zone (small heading wobble never
-  waggles the image). Heading comes from a rotation-vector sensor
-  (`HeadingSensor`, portrait remap); pan saturates at the sides (behind =
-  full side by convention, exact ±180° folds to the right); engine writes
-  throttled to ~10 Hz and deduplicated by a 1% threshold. Degradation:
-  no sensor, no fix, or no headphone-class output (wired/BT/USB,
-  `AudioOutputMonitor` via `registerAudioDeviceCallback`) = center/mono.
-  `Pan is a no-op in engines without a spatial stage`; the MediaPlayer
-  engine applies the linear pan law `L = gain·min(1, 1−pan)`,
+  `relative = normalize(bearingToPin − userHeading)` drives a triangular
+  pan curve — dead zone ±10° (center), linear ramp to ±1 at ±90° (sides),
+  then a linear fade back to 0 towards the back: directly behind (±180°)
+  the signal is centered in both ears. This keeps the back crossing
+  continuous — no ear ever flips at the back. EMA smoothing 0.3 per tick.
+  Heading comes from a rotation-vector sensor (`HeadingSensor`, portrait
+  remap); engine writes throttled to ~10 Hz and deduplicated by a 1%
+  threshold. Degradation: no sensor, no fix, or no headphone-class output
+  (wired/BT/USB, `AudioOutputMonitor` via `registerAudioDeviceCallback`) =
+  center/mono. `setPan` is a no-op in engines without a spatial stage; the
+  MediaPlayer engine applies the linear pan law `L = gain·min(1, 1−pan)`,
   `R = gain·min(1, 1+pan)`. ✅ **Verified on device** (Galaxy S24, Redmi
   Buds 3 Pro over BLE-A2DP): sensor heading within ~2° of the known
   bearing; dead zone held center (relative −2° -> pan −0.000); ~90° left

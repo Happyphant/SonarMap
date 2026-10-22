@@ -38,15 +38,42 @@ class StereoPanCalculatorTest {
     }
 
     @Test
-    fun `relative 180 - source behind - saturates right by convention`() {
-        // Delta normalization folds exact ±180 to +180: behind = right side.
-        assertEquals(1.0, settledPan(180.0), 1e-9)
-        assertEquals(1.0, settledPan(-180.0), 1e-9)
+    fun `relative 180 - source behind - means center, no ear flip`() {
+        // Behind-fade: the back signal is centered in both ears and the
+        // crossing stays continuous — exactly ±180 lands on pan 0.
+        assertEquals(0.0, settledPan(180.0), 1e-9)
+        assertEquals(0.0, settledPan(-180.0), 1e-9)
     }
 
     @Test
     fun `relative 270 - source on the left - means full left`() {
         assertEquals(-1.0, settledPan(270.0), 1e-9)
+    }
+
+    @Test
+    fun `pan fades linearly from the sides back to center behind the user`() {
+        // Triangular curve: peak at 90°, linear falloff to 0 at 180°.
+        // 110°: 1 - (110-90)/90 = 0.778.
+        assertEquals(0.7777778, settledPan(110.0), 1e-6)
+        // 135°: 1 - (135-90)/90 = 0.5.
+        assertEquals(0.5, settledPan(135.0), 1e-9)
+        // Mirror: -135° -> left half of the triangle.
+        assertEquals(-0.5, settledPan(-135.0), 1e-9)
+        // 160°: 1 - (160-90)/90 ≈ 0.222.
+        assertEquals(0.2222222, settledPan(160.0), 1e-6)
+    }
+
+    @Test
+    fun `near the back the pan stays small on both sides`() {
+        // Continuity proof around the back crossing: both sides produce tiny
+        // pans (no ear at full blast on either side), and the exact crossing
+        // point is zero, so a smooth turn cannot audibly "switch" ears.
+        // 172°: fade = 1 - (172-90)/90 = 0.0889.
+        assertEquals(0.0888889, settledPan(172.0), 1e-6)
+        assertEquals(-0.0888889, settledPan(-172.0), 1e-6)
+        // 178°: fade = 1 - 88/90 = 0.0222.
+        assertEquals(0.0222222, settledPan(178.0), 1e-6)
+        assertEquals(-0.0222222, settledPan(-178.0), 1e-6)
     }
 
     @Test
@@ -63,8 +90,10 @@ class StereoPanCalculatorTest {
         assertEquals(0.5, settledPan(50.0), 1e-9)
         // 30° relative: (30-10)/80 = 0.25.
         assertEquals(0.25, settledPan(30.0), 1e-9)
-        // Beyond saturation: 150° relative -> full +1.
-        assertEquals(1.0, settledPan(150.0), 1e-9)
+        // Peak at the sides: 90° -> full +1.
+        assertEquals(1.0, settledPan(90.0), 1e-9)
+        // Past the sides the fade takes over: 100° -> 1 - 10/90 = 0.889.
+        assertEquals(0.8888889, settledPan(100.0), 1e-6)
     }
 
     @Test
@@ -127,6 +156,9 @@ class StereoPanCalculatorTest {
         }
         assertThrows(IllegalArgumentException::class.java) {
             StereoPanParams(maxPanAtDegrees = 5.0, deadZoneDegrees = 10.0)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            StereoPanParams(maxPanAtDegrees = 200.0)
         }
         assertThrows(IllegalArgumentException::class.java) {
             StereoPanParams(smoothingFactor = 2.0)

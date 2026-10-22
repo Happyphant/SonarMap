@@ -8,9 +8,10 @@ import kotlin.math.abs
  * - [deadZoneDegrees] 10° — heading/bearing jitter inside this relative
  *     angle produces no pan at all: small wrist rotations never waggle the
  *     stereo image.
- * - [maxPanAtDegrees] 90° — pan saturates at the sides; behind the user
- *     (90..180°) stays at ±1 (true behind-detection is HRTF territory,
- *     deferred with the FMOD/Resonance engine).
+ * - [maxPanAtDegrees] 90° — the point of maximum pan; beyond it (towards
+ *     the back) the pan FADES back to center instead of staying saturated,
+ *     because plain stereo has no way to render "behind" and a hard ear
+ *     flip at the back-crossing sounds like an audible glitch.
  * - [smoothingFactor] 0.3 per update (~10 Hz update rate) — pans glide.
  */
 data class StereoPanParams(
@@ -19,8 +20,8 @@ data class StereoPanParams(
     val smoothingFactor: Double = 0.3,
 ) {
     init {
-        require(deadZoneDegrees in 0.0..90.0) { "deadZoneDegrees must be in [0, 90]" }
-        require(maxPanAtDegrees > deadZoneDegrees) { "maxPanAtDegrees must exceed the dead zone" }
+        require(deadZoneDegrees in 0.0..maxPanAtDegrees) { "deadZoneDegrees must be in [0, maxPanAtDegrees]" }
+        require(maxPanAtDegrees in 0.0..180.0) { "maxPanAtDegrees must be in [0, 180]" }
         require(smoothingFactor in 0.0..1.0) { "smoothingFactor must be in [0, 1]" }
     }
 }
@@ -32,18 +33,23 @@ data class StereoPanParams(
  * ```
  * relative = normalize(bearing - heading)          // to [-180, 180]
  * dead     = |relative| < deadZone
- * target   = dead ? 0 : sign * clamp((|rel|-dz)/(maxPanAt - dz), 0, 1)
+ * rise     = (|rel| - dz) / (maxPanAt - dz)        // dead zone -> sides
+ * fade     = 1 - (|rel| - 90°) / (180° - 90°)      // sides -> center (back)
+ * target   = dead ? 0 : sign * (|rel| <= 90° ? rise : fade)
  * smoothed = smoothGain(previous, target, smoothingFactor)
  * ```
+ *
+ * Piecewise-linear "triangular" pan curve: full ±1 at the sides, fading
+ * back to 0 towards the back; directly behind (±180°) = center. Both ears
+ * get an equal back signal — practically exact (the head barely shadows
+ * rear sources) and it makes the back crossing CONTINUOUS: no ear ever
+ * flips, no glitch. True behind rendering (HRTF, rear elevation) is
+ * FMOD/Resonance territory, still deferred.
  *
  * Conventions (documented, deterministic):
  * - bearing 0 = north, clockwise positive; heading 0 = facing north.
  * - relative +90° = source on the right -> pan +1 (right ear louder).
- * - directly behind (±180°) folds to pan +1; the delta normalization maps
- *   to [−180, 180] with exact −180 folded to +180. Note: crossing the back
- *   (±90°..180°) pans at saturation and the image flips sides through the
- *   EMA glide — true behind rendering is HRTF territory, deferred with
- *   FMOD/Resonance.
+ * - relative 180° = source behind -> pan 0 (center, both ears).
  * - null heading (no sensor) or null bearing (no fix) -> target 0: mono
  *   degradation, never a random side.
  *
@@ -68,8 +74,16 @@ class StereoPanCalculator(
             if (magnitude <= params.deadZoneDegrees) {
                 0.0
             } else {
-                val span = params.maxPanAtDegrees - params.deadZoneDegrees
-                val scaled = ((magnitude - params.deadZoneDegrees) / span).coerceIn(0.0, 1.0)
+                val level = if (magnitude <= params.maxPanAtDegrees) {
+                    // Rise: dead zone edge -> full ±1 at maxPanAtDegrees.
+                    (magnitude - params.deadZoneDegrees) /
+                        (params.maxPanAtDegrees - params.deadZoneDegrees)
+                } else {
+                    // Behind fade: ±1 at the side -> 0 directly behind the
+                    // back (continuous no-flip crossing).
+                    1.0 - (magnitude - params.maxPanAtDegrees) / (180.0 - params.maxPanAtDegrees)
+                }
+                val scaled = level.coerceIn(0.0, 1.0)
                 if (relative < 0) -scaled else scaled
             }
         }
@@ -82,8 +96,8 @@ class StereoPanCalculator(
         lastPan = 0.0
     }
 
-    /** Shortest signed heading delta a→b in degrees, in [−180, 180] with
-     *  exact −180 folded to +180 (directly behind = right side, documented). */
+    /** Shortest signed heading delta a→b in degrees, in [−180, 180], with
+     *  exact −180 canonicalized to +180 (both map to pan 0 — behind). */
     private fun shortestSignedDelta(fromDegrees: Double, toDegrees: Double): Double {
         val d = ((toDegrees - fromDegrees + 540.0) % 360.0) - 180.0
         return if (d <= -180.0) d + 360.0 else d
