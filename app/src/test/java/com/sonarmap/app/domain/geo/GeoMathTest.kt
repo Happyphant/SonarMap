@@ -6,9 +6,14 @@ import com.sonarmap.app.domain.model.RouteSegment
 import com.sonarmap.app.domain.model.UserLocation
 import com.sonarmap.app.domain.model.segments
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 
 /** One degree of latitude in meters for the IUGG radius used in GeoMath. */
 private const val METERS_PER_DEGREE_LAT = 111_195.0
@@ -259,7 +264,7 @@ class GeoMathTest {
     }
 
     @Test
-    fun `zone boundary keeps a constant distance from a straight route`() {
+    fun `zone rings keep a constant distance from a straight route`() {
         val route = Route(
             id = "r",
             title = "t",
@@ -268,21 +273,22 @@ class GeoMathTest {
             createdAt = 0L,
         )
         val radius = 100.0
-        val boundary = route.audibleZoneBoundary(radius)
-
-        assertTrue("closed polygon, got ${boundary.size}", boundary.size > 10)
-        // Every boundary point sits one radius away from the polyline
-        // (round caps + straight sides of a corridor make this exact).
-        boundary.forEach { point ->
+        val rings = route.audibleZoneRings(radius)
+        assertEquals("straight route draws a single ring, no hole", 1, rings.size)
+        val outer = rings.first()
+        assertTrue("closed ring, got ${outer.size}", outer.size > 10)
+        // Every ring point sits one radius away from the polyline; the grid
+        // iso-interpolation error is well under a meter (step = R/12).
+        outer.forEach { point ->
             val min = route.segments().minOf { segment ->
                 distanceMeters(point, projectPointToSegment(point, segment))
             }
-            assertTrue("point $point is $min m from the line", radius - min < 0.5 && min < radius + 0.5)
+            assertTrue("point $point is $min m from the line", radius - min < 1.0 && min < radius + 1.0)
         }
     }
 
     @Test
-    fun `zone boundary spans the full corridor width`() {
+    fun `zone rings span the full corridor width`() {
         val route = Route(
             id = "r",
             title = "t",
@@ -291,14 +297,14 @@ class GeoMathTest {
             createdAt = 0L,
         )
         val radius = 50.0
-        val lats = route.audibleZoneBoundary(radius).map { it.latitude }
+        val lats = route.audibleZoneRings(radius).first().map { it.latitude }
         // North/south extremes at exactly ±radius around the equator.
         assertEquals(radius, (lats.max() * METERS_PER_DEGREE_LAT), 1.0)
         assertEquals(radius, (-lats.min() * METERS_PER_DEGREE_LAT), 1.0)
     }
 
     @Test
-    fun `zone boundary tolerates duplicate consecutive points`() {
+    fun `zone rings tolerate duplicate consecutive points`() {
         val route = Route(
             id = "r",
             title = "t",
@@ -306,9 +312,9 @@ class GeoMathTest {
             audioAssetUri = "",
             createdAt = 0L,
         )
-        val boundary = route.audibleZoneBoundary(40.0)
-        // All real (non-cap) offsets stay at the requested radius.
-        boundary.forEach { point ->
+        val rings = route.audibleZoneRings(40.0)
+        assertEquals("duplicate vertices collapse: one ring", 1, rings.size)
+        rings.first().forEach { point ->
             val min = route.segments().minOf { segment ->
                 distanceMeters(point, projectPointToSegment(point, segment))
             }
@@ -317,7 +323,7 @@ class GeoMathTest {
     }
 
     @Test
-    fun `zone boundary rejects non-positive radius`() {
+    fun `zone rings reject non-positive radius`() {
         val route = Route(
             id = "r",
             title = "t",
@@ -326,7 +332,190 @@ class GeoMathTest {
             createdAt = 0L,
         )
         assertThrows(IllegalArgumentException::class.java) {
-            route.audibleZoneBoundary(0.0)
+            route.audibleZoneRings(0.0)
+        }
+    }
+
+    /** Straight segments of the boundary touching a shared vertex only. */
+    private fun List<GeoPoint>.containsSelfIntersection(): Boolean {
+        fun cross(o: GeoPoint, a: GeoPoint, b: GeoPoint) =
+            (a.longitude - o.longitude) * (b.latitude - o.latitude) -
+                (a.latitude - o.latitude) * (b.longitude - o.longitude)
+
+        fun onSegment(p: GeoPoint, a: GeoPoint, b: GeoPoint) =
+            minOf(a.latitude, b.latitude) - 1e-12 <= p.latitude &&
+                p.latitude <= maxOf(a.latitude, b.latitude) + 1e-12 &&
+                minOf(a.longitude, b.longitude) - 1e-12 <= p.longitude &&
+                p.longitude <= maxOf(a.longitude, b.longitude) + 1e-12
+
+        fun segmentsIntersect(p1: GeoPoint, p2: GeoPoint, p3: GeoPoint, p4: GeoPoint): Boolean {
+            val d1 = cross(p3, p4, p2)
+            val d2 = cross(p3, p4, p1)
+            val d3 = cross(p1, p2, p4)
+            val d4 = cross(p1, p2, p3)
+            if ((d1 > 1e-12 && d2 < -1e-12) || (d1 < -1e-12 && d2 > 1e-12)) {
+                if ((d3 > 1e-12 && d4 < -1e-12) || (d3 < -1e-12 && d4 > 1e-12)) return true
+            }
+            // Collinear overlap counts as an intersection unless the
+            // segments merely touch at both their shared endpoints.
+            val eps = 1e-12
+            if (abs(d1) < eps && onSegment(p3, p1, p2)) return true
+            if (abs(d2) < eps && onSegment(p4, p1, p2)) return true
+            if (abs(d3) < eps && onSegment(p1, p3, p4)) return true
+            if (abs(d4) < eps && onSegment(p2, p3, p4)) return true
+            return false
+        }
+
+        val n = size
+        for (i in 0 until n) {
+            val a1 = this[i]
+            val a2 = this[(i + 1) % n]
+            for (j in i + 2 until n) {
+                if (i == 0 && j == n - 1) continue // adjacent through closure
+                val b1 = this[j]
+                val b2 = this[(j + 1) % n]
+                if (segmentsIntersect(a1, a2, b1, b2)) return true
+            }
+        }
+        return false
+    }
+
+    /** Even-odd point-in-polygon (ray casting), for the hole-coverage asserts. */
+    private fun List<GeoPoint>.containsPoint(point: GeoPoint): Boolean {
+        var inside = false
+        for (i in indices) {
+            val a = this[i]
+            val b = this[(i + 1) % size]
+            val straddles = (a.latitude > point.latitude) != (b.latitude > point.latitude)
+            if (straddles) {
+                val lonAtLat = (b.longitude - a.longitude) * (point.latitude - a.latitude) /
+                    (b.latitude - a.latitude) + a.longitude
+                if (point.longitude < lonAtLat) inside = !inside
+            }
+        }
+        return inside
+    }
+
+    @Test
+    fun `zone rings keep exact radius around a right-angle bend`() {
+        val route = Route(
+            id = "r",
+            title = "t",
+            // 90° bend with legs much longer than the radius: a plain castle
+            // corner, well clear of the annulus regime.
+            points = listOf(GeoPoint(0.0, 0.0), GeoPoint(0.0, 0.004), GeoPoint(0.004, 0.004)),
+            audioAssetUri = "",
+            createdAt = 0L,
+        )
+        val radius = 150.0
+        val rings = route.audibleZoneRings(radius)
+        assertEquals("right-angle bend draws a single ring", 1, rings.size)
+        rings.first().forEach { point ->
+            val min = route.segments().minOf { segment ->
+                distanceMeters(point, projectPointToSegment(point, segment))
+            }
+            assertTrue("point $point is $min m from the line", abs(min - radius) < 1.0)
+        }
+    }
+
+    @Test
+    fun `zone rings stay loop free on a sharp hairpin bend`() {
+        val route = Route(
+            id = "r",
+            title = "t",
+            // Sharp ~135° bend with segments SHORTER than the radius: the
+            // corridor folds on itself, the iso-contour must stay simple.
+            points = listOf(
+                GeoPoint(0.0, 0.0),
+                GeoPoint(0.0, 0.001),
+                GeoPoint(0.0008, 0.00187),
+            ),
+            audioAssetUri = "",
+            createdAt = 0L,
+        )
+        val radius = 400.0 // wider than a segment: stressed folding
+        val rings = route.audibleZoneRings(radius)
+        assertTrue("at least the outer ring", rings.isNotEmpty())
+        rings.forEach { ring ->
+            assertFalse("ring must not self-intersect", ring.containsSelfIntersection())
+            ring.forEach { point ->
+                val min = route.segments().minOf { segment ->
+                    distanceMeters(point, projectPointToSegment(point, segment))
+                }
+                assertTrue("point $point is $min m from the line", min <= radius + 2.0)
+            }
+        }
+    }
+
+    @Test
+    fun `zone rings of a closed curl form an annulus with a hole`() {
+        // Twelve vertices on a 500 m circle covering 330°: a near-closed loop
+        // whose interior pokes further from the route (500 m) than the zone
+        // radius (300 m) — the exact union of capsules is an annulus, and the
+        // untouched island in the middle must come back as a hole ring.
+        val loopRadius = 500.0
+        fun circlePoint(angleDegrees: Double): GeoPoint {
+            val rad = angleDegrees * PI / 180.0
+            return GeoPoint(
+                latitude = loopRadius * sin(rad) / METERS_PER_DEGREE_LAT,
+                longitude = loopRadius * cos(rad) / METERS_PER_DEGREE_LAT,
+            )
+        }
+        val route = Route(
+            id = "r",
+            title = "t",
+            points = (0..330 step 30).map { circlePoint(it.toDouble()) },
+            audioAssetUri = "",
+            createdAt = 0L,
+        )
+        val zoneRadius = 300.0
+        val rings = route.audibleZoneRings(zoneRadius)
+        assertEquals("annulus: outer ring + hole", 2, rings.size)
+        val (outer, hole) = rings
+        listOf(outer, hole).forEach { ring ->
+            assertFalse("ring must not self-intersect", ring.containsSelfIntersection())
+            ring.forEach { point ->
+                val min = route.segments().minOf { segment ->
+                    distanceMeters(point, projectPointToSegment(point, segment))
+                }
+                assertTrue("point $point is $min m from the line", min <= zoneRadius + 2.0)
+            }
+        }
+        // Route vertices sit inside the painted area and never inside the hole.
+        route.points.forEach { vertex ->
+            assertTrue("vertex $vertex outside outer ring", outer.containsPoint(vertex))
+            assertFalse("vertex $vertex inside hole", hole.containsPoint(vertex))
+        }
+    }
+
+    @Test
+    fun `zone rings stay loop free on an S-curved arc route`() {
+        val route = Route(
+            id = "r",
+            title = "t",
+            // Two alternating sharp bends (proto-arc "дуговой" profile).
+            points = listOf(
+                GeoPoint(0.0, 0.0),
+                GeoPoint(0.0, 0.0008),
+                GeoPoint(0.0006, 0.0013),
+                GeoPoint(0.0012, 0.0013),
+                GeoPoint(0.0017, 0.0008),
+                GeoPoint(0.0017, 0.0),
+            ),
+            audioAssetUri = "",
+            createdAt = 0L,
+        )
+        val radius = 250.0
+        val rings = route.audibleZoneRings(radius)
+        assertTrue("at least the outer ring", rings.isNotEmpty())
+        rings.forEach { ring ->
+            assertFalse("ring must not self-intersect", ring.containsSelfIntersection())
+            ring.forEach { point ->
+                val min = route.segments().minOf { segment ->
+                    distanceMeters(point, projectPointToSegment(point, segment))
+                }
+                assertTrue("point $point is $min m from the line", min <= radius + 2.0)
+            }
         }
     }
 }

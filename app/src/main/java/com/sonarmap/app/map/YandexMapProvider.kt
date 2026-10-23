@@ -193,10 +193,11 @@ class YandexMapProvider : MapProvider {
                         circle.setStrokeWidth(ZONE_STROKE_WIDTH)
                     }
                     is RouteAudibleZoneUi -> {
+                        val outer = zone.rings.firstOrNull() ?: return@forEach
                         val polygon = mapObjects.addPolygon(
                             Polygon(
-                                LinearRing(zone.boundary.map { it.toYandexPoint() }),
-                                emptyList(),
+                                LinearRing(outer.map { it.toYandexPoint() }),
+                                zone.rings.drop(1).map { hole -> LinearRing(hole.map { it.toYandexPoint() }) },
                             ),
                         )
                         polygon.setFillColor(zone.fillArgb())

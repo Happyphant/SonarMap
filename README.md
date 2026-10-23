@@ -138,9 +138,13 @@ Implemented:
 - Hearing areas ("область слышимости") — every pin and route carries its own
   `audibleRadiusMeters` (domain model, default 150 m; repository-clamped
   10..5000). The map renders a zone per source: a circle around each pin
-  and a corridor polygon around each route polyline (`Route.audibleZoneBoundary`
-  builds a miter buffer with semicircular caps in a local equirectangular
-  frame); the ONE active source is filled semitransparent teal, inactive
+  and a corridor polygon around each route polyline (`Route.audibleZoneRings`
+  traces the iso-contour of the distance-to-route field at exactly R by
+  marching squares over a local equirectangular meter grid; the contour is
+  the exact union of segment capsules — loop-free on any bend, and a loop
+  that curls tighter than the radius comes back as an inner "hole" ring,
+  which both map providers render as a polygon inner ring); the ONE active
+  source is filled semitransparent teal, inactive
   ones are contour-only gray. Zones draw beneath lines/markers and are
   tap-through (no listeners on Yandex; Google layers `clickable = false`).
   Size is edited with a slider in both editor sheets ("Область слышимости",
@@ -153,7 +157,11 @@ Implemented:
   mute stays at radius × 1.15 with the old hysteresis). Pin slider gain
   and route gain (1.0) multiply on top as before. MVP note: the mute floor
   replaced the old "silent at 150 m" semantics — the hysteresis dead band
-  remains for GPS-jitter immunity.
+  remains for GPS-jitter immunity. Acoustic side unchanged: gain is
+  computed from the distance to the nearest route point, which is exactly
+  the field the painted contour is an iso-line of, so the acoustic
+  activation edge and the painted edge coincide in every geometry (bends,
+  self-fold, curl eyes).
   ✅ **Verified on device** (Galaxy S24, Redmi Buds 3 Pro): gray contour
   circles around idle pins; the active pin's circle filled instantly with
   the trace matching the per-radius formula exactly (390 m ->
@@ -165,11 +173,19 @@ Implemented:
   round caps; shot-off source turned contour-only (filled fill jumped
   between circle and capsule; the route chip and gray idle line behaved as
   before); closing/reopening sheets mid-playback never stopped the sound
-  (trace continuous through sheet transitions). Unit coverage: edge-floor
-  curve, per-source radius, hysteresis both directions, buffer geometry
+  (trace continuous through sheet transitions).
+  ✅ **Iso-contour geometry verified on device** (Galaxy S24, arc route
+  near ОЦ Горностай, R = 390 m): the zone renders as a smooth union-of-
+  capsules blob with a clean boundary at exactly R on the arc bend (the
+  averaged-normal loop/mangling of the previous buffer construction is
+  gone), survives panning the viewport a full blob away and back without
+  disappearing or garbling. Unit coverage: edge-floor
+  curve, per-source radius, hysteresis both directions, contour geometry
   (constant radius on a straight route, full corridor width, duplicate
-  points tolerance, non-positive radius rejected), repository
-  `updateAudibleRadius` round trip + clamps — 128 tests green.
+  points tolerance, exact radius on a right-angle bend, loop-free hairpin,
+  closed-curl annulus with a hole ring, loop-free S-curve, non-positive
+  radius rejected), repository
+  `updateAudibleRadius` round trip + clamps — 132 tests green.
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
 - Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
   `com.yandex.android:maps.mobile` (lite), play-services-maps + maps-compose

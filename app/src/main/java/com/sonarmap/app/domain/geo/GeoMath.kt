@@ -6,8 +6,11 @@ import com.sonarmap.app.domain.model.RouteSegment
 import com.sonarmap.app.domain.model.UserLocation
 import com.sonarmap.app.domain.model.segments
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -164,26 +167,37 @@ fun Route.projection(position: GeoPoint): RouteProjection {
     return RouteProjection(bestPoint, bestDistance, bestIndex)
 }
 
-/** Semicircle steps of the zone's round caps (visual, not acoustic). */
-private const val ZONE_CAP_STEPS = 12
+/** Cells per radius of the hearing-area iso-grid (each cell ≈ R/12 arc). */
+private const val ZONE_GRID_CELLS_PER_RADIUS = 12
 
-/** Fallback walking direction for a fully degenerate (zero-length) route. */
-private val DOUBLE_UNIT_X = doubleArrayOf(1.0, 0.0)
+/** Rings whose enclosed area falls below (R·0.2)² are grid noise, not real holes. */
+private const val ZONE_RING_MIN_AREA_FACTOR = 0.2
+
+/** One valid (non-degenerate) segment in the local meter frame. */
+private data class ZoneFieldSegment(
+    val ax: Double,
+    val ay: Double,
+    val dirX: Double,
+    val dirY: Double,
+    val lengthSq: Double,
+)
 
 /**
- * Boundary of a route's hearing area: a closed buffer polygon around the
- * polyline at distance [radiusMeters] (the corridor the map renders as the
- * "область слышимости" outline/fill). Semicircle caps at the ends; interior
- * vertices are miter-joined via averaged adjacent normals, so at very sharp
- * bends the boundary can sit marginally closer than the radius to the line
- * — acceptable for hand-drawn walking routes, exact buffering is overkill
- * for a translucent shading layer.
+ * Rings of a route's hearing area: the iso-contours of the distance-to-route
+ * field at exactly [radiusMeters], traced by marching squares over a local
+ * equirectangular meter grid anchored at the first vertex (same frame family
+ * as [projectPointToSegment]). The contour is the exact union of segment
+ * capsules, so the painted edge always coincides with the acoustic one (the
+ * gain floor activates at distance R from the route) — for every bend shape,
+ * including the case a plain offset polygon cannot represent: a route that
+ * curls tighter than the radius makes the zone an annulus, and the silent
+ * "eye" of the curl comes back here as a hole ring, which map providers
+ * render as a polygon inner ring. Zero-length duplicate vertices collapse.
  *
- * Works in one local equirectangular frame anchored at the first vertex
- * (same frame family as [projectPointToSegment]); accurate for city-scale
- * routes.
+ * Rings are ordered [outer, holes…]; the outer ring is counterclockwise and
+ * holes clockwise in the local meter frame.
  */
-fun Route.audibleZoneBoundary(radiusMeters: Double): List<GeoPoint> {
+fun Route.audibleZoneRings(radiusMeters: Double): List<List<GeoPoint>> {
     require(radiusMeters > 0.0) { "radiusMeters must be positive, was $radiusMeters" }
 
     val anchor = points.first()
@@ -193,38 +207,14 @@ fun Route.audibleZoneBoundary(radiusMeters: Double): List<GeoPoint> {
     val xs = points.map { EARTH_RADIUS_METERS * longitudeDelta(anchor.longitude, it.longitude) * RAD_PER_DEGREE * cosRef }
     val ys = points.map { EARTH_RADIUS_METERS * (it.latitude - anchor.latitude) * RAD_PER_DEGREE }
 
-    // Per-vertex unit left normal (interior: mean of the adjacent ones).
-    val n = xs.size
-    val leftUnit = arrayOfNulls<DoubleArray>(n)
-    val directions = arrayOfNulls<DoubleArray>(n - 1) // segment unit directions
-    for (i in 0 until n - 1) {
-        val dx = xs[i + 1] - xs[i]
-        val dy = ys[i + 1] - ys[i]
-        val length = sqrt(dx * dx + dy * dy)
-        if (length >= 1e-6) directions[i] = doubleArrayOf(dx / length, dy / length)
-    }
-    for (i in 0 until n) {
-        // Nearest VALID segment directions around the vertex (zero-length
-        // duplicates in between are skipped, scanning outwards).
-        val prev = (i - 1 downTo 0).firstNotNullOfOrNull { j ->
-            directions[j]?.let { d -> doubleArrayOf(-d[1], d[0]) } // left of direction
+    val segs = buildList {
+        for (i in 0 until points.size - 1) {
+            val ax = xs[i]
+            val ay = ys[i]
+            val dx = xs[i + 1] - ax
+            val dy = ys[i + 1] - ay
+            if (dx * dx + dy * dy >= 1e-12) add(ZoneFieldSegment(ax, ay, dx, dy, dx * dx + dy * dy))
         }
-        val next = (i until n - 1).firstNotNullOfOrNull { j ->
-            directions[j]?.let { d -> doubleArrayOf(-d[1], d[0]) }
-        }
-        val unit = when {
-            prev != null && next != null -> {
-                val sumX = prev[0] + next[0]
-                val sumY = prev[1] + next[1]
-                val sumLength = sqrt(sumX * sumX + sumY * sumY)
-                if (sumLength < 1e-9) prev // U-turn: bevel with the previous side
-                else doubleArrayOf(sumX / sumLength, sumY / sumLength)
-            }
-            prev != null -> prev
-            next != null -> next
-            else -> DOUBLE_UNIT_X // fully degenerate; direction irrelevant
-        }
-        leftUnit[i] = unit
     }
 
     fun backProject(x: Double, y: Double) = GeoPoint(
@@ -232,39 +222,192 @@ fun Route.audibleZoneBoundary(radiusMeters: Double): List<GeoPoint> {
         longitude = anchor.longitude + (x / (EARTH_RADIUS_METERS * cosRef)) * DEG_PER_RAD,
     )
 
-    val boundary = mutableListOf<GeoPoint>()
-    // Inner side of the corridor (left of walking direction), walking order.
-    for (i in 0 until n) boundary += backProject(xs[i] + leftUnit[i]!![0] * radiusMeters, ys[i] + leftUnit[i]!![1] * radiusMeters)
-    // Semicircular cap around the end vertex (through the forward direction).
-    val endDir = directions[n - 2] ?: DOUBLE_UNIT_X
-    run {
-        val base = atan2(endDir[1], endDir[0])
-        for (step in 1 until ZONE_CAP_STEPS) {
-            val angle = base + (PI / 2) - PI * step / ZONE_CAP_STEPS
-            boundary += backProject(
-                xs[n - 1] + radiusMeters * cos(angle),
-                ys[n - 1] + radiusMeters * sin(angle),
-            )
+    // Grid one cell wider than the zone on every side, so a contour chain
+    // can never reach the grid boundary (all boundary cells stay outside).
+    val step = radiusMeters / ZONE_GRID_CELLS_PER_RADIUS
+    val minX = xs.min() - radiusMeters - step
+    val minY = ys.min() - radiusMeters - step
+    val cols = max(1, ceil((xs.max() - xs.min() + 2 * radiusMeters + 2 * step) / step).toInt())
+    val rows = max(1, ceil((ys.max() - ys.min() + 2 * radiusMeters + 2 * step) / step).toInt())
+
+    fun distance(x: Double, y: Double): Double {
+        if (segs.isEmpty()) {
+            val dx = x - xs.first()
+            val dy = y - ys.first()
+            return sqrt(dx * dx + dy * dy)
+        }
+        var best = Double.MAX_VALUE
+        for (seg in segs) {
+            val t = (((x - seg.ax) * seg.dirX + (y - seg.ay) * seg.dirY) / seg.lengthSq).coerceIn(0.0, 1.0)
+            val dx = x - seg.ax - t * seg.dirX
+            val dy = y - seg.ay - t * seg.dirY
+            val d = sqrt(dx * dx + dy * dy)
+            if (d < best) best = d
+        }
+        return best
+    }
+
+    // Corner distances; rows go south -> north, columns west -> east.
+    val field = DoubleArray((rows + 1) * (cols + 1))
+    for (r in 0..rows) {
+        val y = minY + step * r
+        val rowBase = r * (cols + 1)
+        for (c in 0..cols) {
+            field[rowBase + c] = distance(minX + step * c, y)
         }
     }
-    // Outer side of the corridor, reversed walking order.
-    for (i in n - 1 downTo 0) {
-        val u = leftUnit[i]!!
-        boundary += backProject(xs[i] - u[0] * radiusMeters, ys[i] - u[1] * radiusMeters)
+
+    val iso = radiusMeters
+
+    /**
+     * Crossing points, keyed by grid edge so neighbouring cells reference the
+     * SAME coordinate (same corner pair -> bitwise equal double), which makes
+     * contour stitching exact. Edge id: horizontal edge h(r,c) spans corners
+     * (r,c)-(r,c+1); vertical edge v(r,c) spans (r,c)-(r+1,c).
+     */
+    val crossingIndexByKey = HashMap<Long, Int>()
+    val crossingXs = ArrayList<Double>()
+    val crossingYs = ArrayList<Double>()
+    val verticalKeyBase = (rows + 1L) * (cols + 1)
+
+    fun crossingByKey(horizontal: Boolean, row: Int, col: Int): Int {
+        val key = if (horizontal) {
+            row * (cols + 1L) + col
+        } else {
+            verticalKeyBase + col * (rows + 1L) + row
+        }
+        crossingIndexByKey[key]?.let { return it }
+
+        // Corner coordinates of this edge.
+        val ax = minX + step * col
+        val ay = minY + step * row
+        val bx = if (horizontal) minX + step * (col + 1) else ax
+        val by = if (horizontal) ay else minY + step * (row + 1)
+        val d1 = field[row * (cols + 1) + col]
+        val d2 = field[if (horizontal) row * (cols + 1) + col + 1 else (row + 1) * (cols + 1) + col]
+
+        var x: Double
+        var y: Double
+        if ((d1 <= iso) != (d2 <= iso)) {
+            // The edge straddles the iso; find the point where the TRUE field
+            // equals it by bisection. Linear interpolation of corner values
+            // can land meters off where the distance field folds around the
+            // medial axis of overlapping capsules — bisection is immune.
+            val insideAtA = d1 <= iso
+            var lo = 0.0
+            var hi = 1.0
+            repeat(32) {
+                val t = (lo + hi) / 2
+                val dt = distance(ax + (bx - ax) * t, ay + (by - ay) * t)
+                if ((dt <= iso) == insideAtA) lo = t else hi = t
+            }
+            val t = (lo + hi) / 2
+            x = ax + (bx - ax) * t
+            y = ay + (by - ay) * t
+        } else {
+            // Defensive fallback for a non-straddling edge (never referenced
+            // by the cell LUT): midpoint, so stitching cannot break.
+            x = (ax + bx) / 2
+            y = (ay + by) / 2
+        }
+        val index = crossingXs.size
+        crossingXs.add(x)
+        crossingYs.add(y)
+        crossingIndexByKey[key] = index
+        return index
     }
-    // Semicircular cap around the start vertex (through the backward direction).
-    val startDir = directions[0] ?: DOUBLE_UNIT_X
-    run {
-        val base = atan2(startDir[1], startDir[0])
-        for (step in 1 until ZONE_CAP_STEPS) {
-        // Decreasing angle: the arc bulges BACKWARD (through -dir), not
-        // through the corridor interior — otherwise the polygon self-intersects.
-        val angle = base - (PI / 2) - PI * step / ZONE_CAP_STEPS
-            boundary += backProject(
-                xs[0] + radiusMeters * cos(angle),
-                ys[0] + radiusMeters * sin(angle),
-            )
+
+    /** Oriented cell LUT, walk direction keeps the zone region on the LEFT. */
+    fun cellLinks(row: Int, col: Int): List<Pair<Int, Int>> {
+        val sw = field[row * (cols + 1) + col] <= iso
+        val se = field[row * (cols + 1) + col + 1] <= iso
+        val ne = field[(row + 1) * (cols + 1) + col + 1] <= iso
+        val nw = field[(row + 1) * (cols + 1) + col] <= iso
+        val code = (if (sw) 1 else 0) or (if (se) 2 else 0) or (if (ne) 4 else 0) or (if (nw) 8 else 0)
+        val e0 = { crossingByKey(horizontal = true, row = row, col = col) }
+        val e1 = { crossingByKey(horizontal = false, row = row, col = col + 1) }
+        val e2 = { crossingByKey(horizontal = true, row = row + 1, col = col) }
+        val e3 = { crossingByKey(horizontal = false, row = row, col = col) }
+        return when (code) {
+            1 -> listOf(e0() to e3())
+            2 -> listOf(e1() to e0())
+            3 -> listOf(e1() to e3())
+            4 -> listOf(e2() to e1())
+            5 -> if (distance(minX + step * (col + 0.5), minY + step * (row + 0.5)) <= iso) {
+                listOf(e0() to e1(), e2() to e3())
+            } else {
+                listOf(e0() to e3(), e2() to e1())
+            }
+            6 -> listOf(e2() to e0())
+            7 -> listOf(e2() to e3())
+            8 -> listOf(e3() to e2())
+            9 -> listOf(e0() to e2())
+            10 -> if (distance(minX + step * (col + 0.5), minY + step * (row + 0.5)) <= iso) {
+                listOf(e3() to e0(), e1() to e2())
+            } else {
+                listOf(e1() to e0(), e3() to e2())
+            }
+            11 -> listOf(e1() to e2())
+            12 -> listOf(e3() to e1())
+            13 -> listOf(e0() to e1())
+            14 -> listOf(e3() to e0())
+            else -> emptyList() // 0 and 15
         }
     }
-    return boundary
+
+    // One outgoing link per crossing node; every crossing lies on exactly one
+    // closed chain because shared edges reuse the same crossing and the cell
+    // LUT keeps the zone region on one side of the walk everywhere.
+    val outgoing = HashMap<Int, Int>()
+    for (r in 0 until rows) {
+        for (c in 0 until cols) {
+            for ((from, to) in cellLinks(r, c)) {
+                outgoing[from] = to
+            }
+        }
+    }
+
+    val visited = HashSet<Int>()
+    val rings = ArrayList<List<DoubleArray>>()
+    for (start in crossingIndexByKey.values) {
+        if (start in visited) continue
+        val ring = ArrayList<DoubleArray>()
+        var node = start
+        do {
+            visited.add(node)
+            ring.add(doubleArrayOf(crossingXs[node], crossingYs[node]))
+            node = outgoing[node] ?: break // unreachable for a well-formed chain
+        } while (node != start)
+        if (ring.size >= 3) rings.add(ring)
+    }
+
+    // Area in the local frame decides ring role and winding; drop noise.
+    fun signedArea(ring: List<DoubleArray>): Double {
+        var sum = 0.0
+        for (i in ring.indices) {
+            val a = ring[i]
+            val b = ring[(i + 1) % ring.size]
+            sum += a[0] * b[1] - b[0] * a[1]
+        }
+        return sum / 2.0
+    }
+
+    val minAbsArea = ZONE_RING_MIN_AREA_FACTOR * radiusMeters * radiusMeters
+    val kept = rings
+        .filter { abs(signedArea(it)) >= minAbsArea }
+        // Drop vertices that coincide with their predecessor (degenerate cells).
+        .map { ring ->
+            ring.distinctBy { (it[0] * 1e7).toLong() to (it[1] * 1e7).toLong() }
+        }
+        .filter { it.size >= 3 }
+        .sortedByDescending { abs(signedArea(it)) }
+    if (kept.isEmpty()) return emptyList()
+
+    return kept.mapIndexed { index, ring ->
+        val area = signedArea(ring)
+        // Outer CCW, holes CW; reorient only if the walk disagrees.
+        val shouldReverse = if (index == 0) area < 0 else area > 0
+        val oriented = if (shouldReverse) ring.reversed() else ring
+        oriented.map { backProject(it[0], it[1]) }
+    }
 }

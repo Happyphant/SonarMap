@@ -89,7 +89,8 @@ class GoogleMapsProvider : MapProvider {
                     )
                 } else if (zone is RouteAudibleZoneUi) {
                     Polygon(
-                        points = zone.boundary.map { it.toLatLng() },
+                        points = zone.rings.firstOrNull().orEmpty().map { it.toLatLng() },
+                        holes = zone.rings.drop(1).map { hole -> hole.map { it.toLatLng() } },
                         clickable = false,
                         strokeColor = zone.strokeColor(),
                         strokeWidth = 2f,

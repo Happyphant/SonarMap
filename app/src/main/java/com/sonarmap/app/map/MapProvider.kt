@@ -2,7 +2,7 @@ package com.sonarmap.app.map
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import com.sonarmap.app.domain.geo.audibleZoneBoundary
+import com.sonarmap.app.domain.geo.audibleZoneRings
 import com.sonarmap.app.domain.model.GeoPoint
 import com.sonarmap.app.domain.model.MusicPin
 import com.sonarmap.app.domain.model.Route
@@ -79,11 +79,14 @@ data class PinAudibleZoneUi(
     override val id: String get() = pinId
 }
 
-/** Corridor hearing area of one route (already a closed boundary polygon). */
+/** Corridor hearing area of one route (rings: outer first, then holes). */
 data class RouteAudibleZoneUi(
     val routeId: String,
-    /** Corridor boundary; see [com.sonarmap.app.domain.geo.audibleZoneBoundary]. */
-    val boundary: List<GeoPoint>,
+    /**
+     * Zone rings: first is the outer boundary, the rest are holes (route
+     * curls tighter than the radius). See [com.sonarmap.app.domain.geo.audibleZoneRings].
+     */
+    val rings: List<List<GeoPoint>>,
     override val radiusMeters: Double,
     override val isActive: Boolean,
 ) : AudibleZoneUi {
@@ -131,7 +134,7 @@ fun audibleZonesOf(
     } + routes.map { route ->
         RouteAudibleZoneUi(
             routeId = route.id,
-            boundary = route.audibleZoneBoundary(route.audibleRadiusMeters),
+            rings = route.audibleZoneRings(route.audibleRadiusMeters),
             radiusMeters = route.audibleRadiusMeters,
             isActive = route.id == activeRouteId,
         )
