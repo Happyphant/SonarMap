@@ -5,13 +5,12 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Edge cases of the proximity gain curve (defaults: 150 m, edge 0.15, x1.15, alpha .35). */
+/** Edge cases of the proximity gain curve (defaults: 150 m, edge 0.15, alpha .35). */
 class ProximityGainCalculatorTest {
 
     private val params = ProximityGainParams(
         defaultMaxDistanceMeters = 150.0,
         edgeGain = 0.15,
-        hysteresisFactor = 1.15,
         smoothingFactor = 0.35,
     )
 
@@ -59,6 +58,12 @@ class ProximityGainCalculatorTest {
     }
 
     @Test
+    fun `the zone edge itself still plays at the floor`() {
+        // d == R is inside (the painted boundary is inclusive).
+        assertEquals(0.15, settle(distance = 150.0, userGain = 1.0), 1e-9)
+    }
+
+    @Test
     fun `gain stays zero far beyond the zone`() {
         assertEquals(0.0, settle(distance = 900.0), 1e-9)
     }
@@ -73,46 +78,70 @@ class ProximityGainCalculatorTest {
     }
 
     @Test
-    fun `dead zone keeps the source muted until back inside the zone`() {
+    fun `walking out past the edge cuts the sound immediately`() {
         val c = calc()
-        repeat(10) { c.update(100.0, 1.0) } // active, audible (~0.43)
+        var out = 0.0
+        repeat(80) { out = c.update(100.0, 1.0) } // settled audible ~0.433
 
-        // Walk out past the off-threshold (150 * 1.15 = 172.5 m): muted.
-        repeat(30) { c.update(180.0, 1.0) }
-        assertTrue("must be muted far out", c.update(180.0, 1.0) < 1e-3)
-
-        // Back into the hysteresis band (150..172.5): stays off.
-        assertTrue("dead zone must stay off", c.update(160.0, 1.0) < 1e-3)
-
-        // Inside the zone again: audible (smoothing climbs from ~0).
-        val reactivated = c.update(140.0, 1.0)
-        assertTrue("must reactivate, was $reactivated", reactivated > 0.0)
-    }
-
-    @Test
-    fun `jitter in the hysteresis band never pops the muted source back on`() {
-        val c = calc()
-        repeat(30) { c.update(180.0, 1.0) } // muted far out
-
-        // Oscillate inside the dead zone band (150..172.5): the muted state
-        // must hold until the user is truly back inside the zone.
-        repeat(20) {
-            val out = c.update(if (it % 2 == 0) 171.0 else 155.0, 1.0)
-            assertTrue("flicker: muted source popped on at ${out}", out < 1e-3)
+        // One tick beyond the painted boundary (R = 150): EXACT zero, no
+        // fade tail, no dead band up to R * 1.15.
+        val cut = c.update(152.0, 1.0)
+        assertEquals("must cut instantly, was $cut", 0.0, cut, 0.0)
+        repeat(5) {
+            assertEquals(0.0, c.update(152.0, 1.0), 0.0)
         }
     }
 
     @Test
-    fun `jitter just outside the zone keeps playing at the floor`() {
+    fun `first fix beyond the zone from the preview state cuts immediately`() {
         val c = calc()
-        repeat(30) { c.update(149.5, 1.0) } // audible near the edge (~0.153)
+        repeat(80) { c.update(null, 1.0) } // preview at full slider
+        assertEquals(0.0, c.update(300.0, 1.0), 0.0)
+    }
 
-        // Steps just outside the visible boundary stay above zero until the
-        // outer threshold; no drop-to-silence flicker at the edge.
-        repeat(20) {
-            val out = c.update(if (it % 2 == 0) 155.0 else 171.0, 1.0)
-            assertTrue("pop to silence at the edge: $out", out > 0.1)
-        }
+    @Test
+    fun `entering the zone turns the sound on at the floor immediately`() {
+        val c = calc()
+        repeat(10) { c.update(180.0, 1.0) } // outside, silenced
+        assertEquals(0.0, c.update(180.0, 1.0), 0.0)
+
+        // One tick back inside at the boundary: audible at edgeGain right
+        // away, not a smoothed ramp.
+        val reactivated = c.update(150.0, 1.0)
+        assertEquals("must come on instantly, was $reactivated", 0.15, reactivated, 1e-9)
+
+        // Just inside the boundary the snapped value is the exact curve.
+        assertEquals(0.0, c.update(152.0, 1.0), 0.0)
+        val justInside = c.update(149.0, 1.0)
+        assertEquals(0.15 + 0.85 * (1 - 149.0 / 150.0), justInside, 1e-9)
+    }
+
+    @Test
+    fun `expanding the zone raises the volume, shrinking lowers it`() {
+        val d = 100.0
+        val narrow = settle(distance = d, userGain = 1.0, zoneRadius = 110.0)
+        val wide = settle(distance = d, userGain = 1.0, zoneRadius = 200.0)
+        // shaped = 0.15 + 0.85 * (1 - d/R): a wider R is always louder
+        // for the same d. Between them a middle zone is strictly in the
+        // middle, i.e. the response is monotonic in R.
+        val mid = settle(distance = d, userGain = 1.0, zoneRadius = 150.0)
+        assertTrue("narrow $narrow must be the quietest", narrow < mid)
+        assertTrue("mid $mid must stay below wide $wide", mid < wide)
+        // Spot-check the exact curve values while inside.
+        assertEquals(0.15 + 0.85 * (1 - d / 110), narrow, 1e-9)
+        assertEquals(0.15 + 0.85 * (1 - d / 200), wide, 1e-9)
+    }
+
+    @Test
+    fun `shrinking the zone past the listener cuts immediately`() {
+        val c = calc()
+        var out = 0.0
+        repeat(80) { out = c.update(100.0, 1.0, zoneRadiusMeters = 150.0) } // ~0.433 audible
+
+        // The editor shrinks the zone below the listener's distance: that
+        // is "outside the area" — an instant cut, not a fade.
+        val cut = c.update(100.0, 1.0, zoneRadiusMeters = 95.0)
+        assertEquals("shrink-past must cut instantly, was $cut", 0.0, cut, 0.0)
     }
 
     @Test
@@ -127,6 +156,13 @@ class ProximityGainCalculatorTest {
         // The slider still has an effect during a GPS gap.
         repeat(80) { c.update(null, 0.2) }
         assertTrue(c.update(null, 0.2) < before)
+    }
+
+    @Test
+    fun `gps gap does not resurrect a source muted by leaving the zone`() {
+        val c = calc()
+        repeat(10) { c.update(180.0, 1.0) } // outside -> cut
+        assertEquals(0.0, c.update(null, 1.0), 1e-9) // gap holds silence
     }
 
     @Test
@@ -167,17 +203,14 @@ class ProximityGainCalculatorTest {
         // inside the default 150 m zone would give 0.83).
         assertEquals(0.575, settle(distance = 30.0, userGain = 1.0, zoneRadius = 60.0), 1e-9)
 
-        // A tiny zone also silences sooner: 70 m is past 60 * 1.15.
-        assertEquals(0.0, settle(distance = 70.0, userGain = 1.0, zoneRadius = 60.0), 1e-3)
+        // A small zone cuts the sound at its own edge: 70 m is past 60 m.
+        assertEquals(0.0, settle(distance = 70.0, userGain = 1.0, zoneRadius = 60.0), 1e-12)
     }
 
     @Test
     fun `params reject absurd configuration`() {
         assertThrows(IllegalArgumentException::class.java) {
             ProximityGainParams(defaultMaxDistanceMeters = 0.0)
-        }
-        assertThrows(IllegalArgumentException::class.java) {
-            ProximityGainParams(hysteresisFactor = 0.9)
         }
         assertThrows(IllegalArgumentException::class.java) {
             ProximityGainParams(smoothingFactor = 1.5)

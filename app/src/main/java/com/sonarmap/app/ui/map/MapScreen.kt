@@ -59,7 +59,7 @@ import com.sonarmap.app.audio.LocationAudioController
 import com.sonarmap.app.audio.MediaPlayerAudioEngine
 import com.sonarmap.app.audio.PositionedSourceAudio
 import com.sonarmap.app.map.audibleZonesOf
-import kotlin.math.roundToInt
+import com.sonarmap.app.ui.common.HearingAreaRadiusSlider
 import com.sonarmap.app.domain.audio.AudioEngineListener
 import com.sonarmap.app.domain.audio.AudioErrorKind
 import com.sonarmap.app.domain.audio.AudioPlaybackState
@@ -704,18 +704,10 @@ private fun PinEditorSheet(
 
             // The size of the painted hearing-area circle; the gain curve
             // follows the same number (floor at the boundary, louder inside).
-            Column {
-                Text(
-                    text = "Область слышимости: ${pin.audibleRadiusMeters.roundToInt()} м",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Slider(
-                    value = pin.audibleRadiusMeters.toFloat().coerceIn(50f, 500f),
-                    onValueChange = { onRadiusChange(it.toDouble().roundToStep()) },
-                    valueRange = 50f..500f,
-                    steps = 44, // 10-meter detents
-                )
-            }
+            HearingAreaRadiusSlider(
+                radiusMeters = pin.audibleRadiusMeters,
+                onRadiusChange = onRadiusChange,
+            )
 
             TextButton(
                 onClick = onDelete,
@@ -737,9 +729,6 @@ private fun formatDistance(distanceMeters: Double?): String = when {
     distanceMeters < 1_000.0 -> "%.0f м".format(distanceMeters)
     else -> "%.1f км".format(distanceMeters / 1_000.0)
 }
-
-/** Snaps a raw slider position to 10-meter detents (fixes FP drift). */
-private fun Double.roundToStep(): Double = (this / 10.0).roundToInt() * 10.0
 
 private fun Context.openAppDetailsSettings() {
     val intent = Intent(

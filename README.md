@@ -25,17 +25,28 @@ Implemented:
   as snackbars; coordinates smoothed by a per-coordinate Kalman filter
   before rendering; live "distance to pin" in the editor sheet
 - Proximity loudness (`LocationAudioController`): engine volume of the
-  selected pin follows the live distance — `gain = clamp(1 - d/maxDistance, 0, 1)`,
-  maxDistance 150 m, hysteresis dead zone up to ×1.15 (mute stays muted
-  until back inside maxDistance), per-tick EMA smoothing 0.35 (~0.7 s at
-  2 Hz); no fix = full slider loudness (manual preview unaffected); pin
-  switch resets the smoothing memory; the controller is the single
-  engine-volume writer while the screen is alive. Verified on device
-  (Galaxy S24, unlocked screen): trace matched the formula to 3 decimals
-  on a ~260 m out-and-back walk, silence inside the dead zone, no pops.
+  selected pin follows the live distance to the source — inside the
+  hearing area `gain = (0.15 + 0.85 * (1 - d/R)) * slider` (edge floor
+  0.15, rising linearly to full at the source), per-tick EMA smoothing
+  0.35 (~0.7 s at 2 Hz); stepping past the painted edge (d > R) cuts the
+  sound IMMEDIATELY (exact zero, no smoothing tail, no dead band — the
+  old ±1.15 hysteresis is gone), crossing back turns the sound ON at the
+  curve value in the same tick; no fix = full slider loudness (manual
+  preview unaffected; a brief GPS gap holds the last value); pin switch
+  resets the smoothing memory; the controller is the single engine-volume
+  writer while the screen is alive. Resizing the zone does the same
+  things to the sound without moving: widening raises the volume of a
+  listener inside, shrinking lowers it, and shrinking past the listener
+  cuts instantly. Verified on device
+  (Galaxy S24, speaker output): trace matched the formula to 3 decimals
+  (d = 85.9, R = 150 -> 0.359), a slider drag to the middle of the
+  50..100 segment landed on interpolated values (R ≈ 187 -> gain 0.430,
+  R ≈ 145 -> 0.348), shrink-past cut at once (0.253 -> 0.000 in one
+  tick), re-expansion past the listener restored the sound at once at
+  the curve value (0.000 -> 0.177) and further widening kept raising it
+  (0.177 .. 0.348) — no dead zone left, "звук сразу прерывается".
   (Superseded: the maxDistance is now a per-source audible zone radius —
-  see "Hearing areas"; the curve enters at an edge floor of 0.15 instead
-  of zero, everything else holds.)
+  see "Hearing areas".)
 - Stereo positioning of the active pin: relative angle
   `relative = normalize(bearingToPin − userHeading)` drives a triangular
   pan curve — dead zone ±10° (center), linear ramp to ±1 at ±90° (sides),
@@ -147,17 +158,25 @@ Implemented:
   source is filled semitransparent teal, inactive
   ones are contour-only gray. Zones draw beneath lines/markers and are
   tap-through (no listeners on Yandex; Google layers `clickable = false`).
-  Size is edited with a slider in both editor sheets ("Область слышимости",
-  50–500 m, 10 m detents) through `updateAudibleRadius` in both
-  repositories. The gain curve follows the same radius per source: silence
-  outside the zone, ON at the zone edge at the `edgeGain` floor (0.15 —
-  "минимальная громкость"), rising linearly to full loudness at the source
-  (`ProximityGainCalculator.update` now takes the per-source radius;
-  inward reactivation happens exactly at the painted boundary, outward
-  mute stays at radius × 1.15 with the old hysteresis). Pin slider gain
+  Size is edited with a non-uniform slider in both editor sheets
+  ("Область слышимости", shared `ui/common/HearingAreaRadiusSlider`):
+  tick values 10, 20, 30, 50, 100, 150, 200 and 300 m sit at equally
+  spaced positions on the track (a tick-mark row is drawn under it) and
+  the value between neighbors interpolates linearly, so the default 150
+  lands exactly on its tick, every intermediate position is reachable
+  and the visible value updates smoothly; `roundToStep` detents are gone.
+  Applied through `updateAudibleRadius` in both repositories. The gain
+  curve follows the same radius per source: silence outside the zone,
+  ON at the zone edge at the `edgeGain` floor (0.15 — "минимальная
+  громкость") — instantly, not after a ramp — rising linearly to full
+  loudness at the source (`ProximityGainCalculator.update` takes the
+  per-source radius), and immediate silence again the tick the listener
+  is outside the zone (d > R): entering the area → audible, widening →
+  louder, narrowing → quieter, leaving (or narrowing past the listener)
+  → the sound stops at once. Pin slider gain
   and route gain (1.0) multiply on top as before. MVP note: the mute floor
-  replaced the old "silent at 150 m" semantics — the hysteresis dead band
-  remains for GPS-jitter immunity. Acoustic side unchanged: gain is
+  replaced the old "silent at 150 m" semantics. Acoustic side unchanged:
+  gain is
   computed from the distance to the nearest route point, which is exactly
   the field the painted contour is an iso-line of, so the acoustic
   activation edge and the painted edge coincide in every geometry (bends,
@@ -174,18 +193,42 @@ Implemented:
   between circle and capsule; the route chip and gray idle line behaved as
   before); closing/reopening sheets mid-playback never stopped the sound
   (trace continuous through sheet transitions).
+  ✅ **Non-uniform scale + sharp audio edges verified on device**
+  (Galaxy S24, fresh install, speaker output): the editor sheet shows the
+  tick row (8 marks) under the rebuilt slider, the thumb sits on the 150 m
+  tick and drags settle on interpolated values (R ≈ 187 -> zone repaints
+  bigger, trace gain 0.359 -> 0.430 at the same d = 85.9); shrinking
+  past the listener drops the gain monotonically (0.430 → 0.428 → 0.414 →
+  0.382 → 0.333 → 0.253) and cuts it to EXACT zero the tick R < d (no
+  fading tail, nothing plays between R and R·1.15 anymore); widening back
+  restores the sound at once at the curve value (0.000 → 0.177) and keeps
+  rising smoothly to 0.348 at R ≈ 145 — "входим -> звук становится
+  слышен, расширяем -> громче, сужаем -> тише, вышли -> сразу прерывается".
+  Unit coverage of the new edges: instant cut past the edge, instant ON at
+  the edge floor on re-entry, exact floor at d = R, monotonic widen/narrow
+  response, shrink-past cut, first-fix preview cut, GPS-gap holds (inside
+  and muted) — `HearingAreaScale` mapping (tick positions, interpolation,
+  round-trips, monotonicity, clamps). 145 tests green.
   ✅ **Iso-contour geometry verified on device** (Galaxy S24, arc route
   near ОЦ Горностай, R = 390 m): the zone renders as a smooth union-of-
   capsules blob with a clean boundary at exactly R on the arc bend (the
   averaged-normal loop/mangling of the previous buffer construction is
   gone), survives panning the viewport a full blob away and back without
   disappearing or garbling. Unit coverage: edge-floor
-  curve, per-source radius, hysteresis both directions, contour geometry
+  curve, per-source radius, sharp zone-edge cut/entry, contour geometry
   (constant radius on a straight route, full corridor width, duplicate
   points tolerance, exact radius on a right-angle bend, loop-free hairpin,
   closed-curl annulus with a hole ring, loop-free S-curve, non-positive
   radius rejected), repository
-  `updateAudibleRadius` round trip + clamps — 132 tests green.
+  `updateAudibleRadius` round trip + clamps (test count above).
+- App icon from the reference art: adaptive launcher icon
+  (`mipmap-anydpi-v26`, minSdk 26) — lavender background
+  (`ic_launcher_background`) + a hand-drawn vector foreground
+  (`drawable/ic_launcher_foreground`): red cat-head pin with dark outline,
+  blue headphones (band + cups), closed eyes, white muzzle, pink inner
+  ears, yellow/blue music notes; the same vector serves as the
+  `monochrome` layer for themed icons. Manifest wired
+  (`android:icon`/`android:roundIcon`).
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
 - Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
   `com.yandex.android:maps.mobile` (lite), play-services-maps + maps-compose

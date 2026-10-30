@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher icon background from the reference art: soft lavender field
+     behind the red cat-head pin. -->
+<resources>
+    <color name="ic_launcher_background">#CBC5F7</color>
+</resources>
