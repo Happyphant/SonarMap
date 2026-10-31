@@ -204,8 +204,6 @@ class PlaybackForegroundService : Service() {
 
             launch {
                 playingSource.collect { key ->
-                    val t = sourceTitle(pinRepository, routeRepository)
-                    Log.d(TAG, "playingSource key=$key title=$t")
                     val (_, uri) = key ?: run {
                         engine.pause()
                         updateNotification(null)
@@ -213,7 +211,7 @@ class PlaybackForegroundService : Service() {
                     }
                     engine.prepare(uri)
                     engine.play()
-                    updateNotification(t)
+                    updateNotification(sourceTitle(pinRepository, routeRepository))
                 }
             }
 
