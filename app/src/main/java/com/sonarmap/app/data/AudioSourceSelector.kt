@@ -33,10 +33,19 @@ class AudioSourceSelector(
 /**
  * Process-wide singleton alongside the two repositories — the selection
  * rules must be identical no matter which screen's ViewModel calls in.
+ * Built lazily with an app context, same pattern as the repository
+ * providers (Room needs one).
  */
 object AudioSourceSelectorProvider {
-    val selector: AudioSourceSelector = AudioSourceSelector(
-        pins = MusicPinRepositoryProvider.repository,
-        routes = RouteRepositoryProvider.repository,
-    )
+
+    @Volatile
+    private var instance: AudioSourceSelector? = null
+
+    fun selector(context: android.content.Context): AudioSourceSelector =
+        instance ?: synchronized(this) {
+            instance ?: AudioSourceSelector(
+                pins = MusicPinRepositoryProvider.repository(context),
+                routes = RouteRepositoryProvider.repository(context),
+            ).also { instance = it }
+        }
 }

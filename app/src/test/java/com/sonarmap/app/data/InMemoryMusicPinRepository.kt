@@ -11,9 +11,9 @@ import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 /**
- * Thread-safe in-memory store. Pure Kotlin/JVM — unit-testable without
- * an Android runtime. Deliberately simple: Room replaces this later behind
- * the same interface.
+ * TEST fixture: thread-safe in-memory store. Pure Kotlin/JVM — used by the
+ * unit tests of the repository contracts and AudioSourceSelector.
+ * Production wiring is com.sonarmap.app.data.RoomMusicPinRepository.
  */
 class InMemoryMusicPinRepository : MusicPinRepository {
 
@@ -81,12 +81,4 @@ class InMemoryMusicPinRepository : MusicPinRepository {
     ) {
         _pins.value = _pins.value.map { if (predicate(it)) transform(it) else it }
     }
-}
-
-/**
- * Process-wide singleton so pins survive ViewModel recreation and back-stack
- * changes; process death still clears them until persistence (Room) is added.
- */
-object MusicPinRepositoryProvider {
-    val repository: MusicPinRepository = InMemoryMusicPinRepository()
 }

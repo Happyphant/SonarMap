@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
 
 // Both map API keys come from local.properties (gitignored). Never commit real keys.
@@ -59,6 +60,15 @@ android {
     }
 }
 
+// Room: export the schema JSON into version control. The committed
+// app/schemas/<version>.json files are the migration strategy baseline:
+// every future schema change bumps the version and ships a Migration
+// (destructive fallback is not acceptable — users' pins/routes are data).
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+    arg("room.incremental", "true")
+}
+
 dependencies {
     // Core + Lifecycle
     implementation(libs.androidx.core.ktx)
@@ -79,6 +89,11 @@ dependencies {
 
     // Coroutines / Flow
     implementation(libs.kotlinx.coroutines.android)
+
+    // Local persistence (Room): the data package's SQLite backend.
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 
     // Maps: only the map package (providers) may use these.
     // Yandex MapKit — default provider; Google Maps — kept working, optional.

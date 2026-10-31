@@ -33,16 +33,16 @@ fun SonarMapRoot(modifier: Modifier = Modifier) {
 
     val mapViewModel = viewModel {
         MapViewModel(
-            repository = MusicPinRepositoryProvider.repository,
+            repository = MusicPinRepositoryProvider.repository(context.applicationContext),
             locationRepository = LocationRepositoryProvider.repository(context.applicationContext),
-            sourceSelector = AudioSourceSelectorProvider.selector,
+            sourceSelector = AudioSourceSelectorProvider.selector(context.applicationContext),
         )
     }
     val routeViewModel = viewModel {
         RouteViewModel(
-            routeRepository = RouteRepositoryProvider.repository,
-            pinRepository = MusicPinRepositoryProvider.repository,
-            sourceSelector = AudioSourceSelectorProvider.selector,
+            routeRepository = RouteRepositoryProvider.repository(context.applicationContext),
+            pinRepository = MusicPinRepositoryProvider.repository(context.applicationContext),
+            sourceSelector = AudioSourceSelectorProvider.selector(context.applicationContext),
         )
     }
 

@@ -1,7 +1,7 @@
 # Version catalog for SonarMap.
 # Scope rule: only Compose, Navigation Compose, Lifecycle, Coroutines/Flow,
-# and map SDKs behind the MapProvider abstraction (Yandex MapKit, Google Maps).
-# Room, audio engines (FMOD/Resonance), and location services are added later.
+# Room (local persistence), and map SDKs behind the MapProvider abstraction
+# (Yandex MapKit, Google Maps). Audio engines (FMOD/Resonance) come later.
 
 [versions]
 # Latest stable MapKit Mobile SDK line (Sep 2026). `-lite` ships only the
@@ -9,6 +9,9 @@
 yandexMapkit = "4.45.0-lite"
 agp = "8.7.3"
 kotlin = "2.1.0"
+# KSP matched against `kotlin` (2.1.0); Room 2.7+ is required for KSP2.
+ksp = "2.1.0-1.0.29"
+room = "2.7.1"
 jetbrainsKotlinJvm = "2.0.21"
 coreKtx = "1.13.1"
 lifecycle = "2.8.7"
@@ -35,6 +38,10 @@ androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
 androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
 androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
 androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
+# Local persistence: Room over SQLite; schema JSON is exported to app/schemas.
+androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
+androidx-room-ktx = { module = "androidx.room:room-ktx", version.ref = "room" }
+androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 play-services-maps = { module = "com.google.android.gms:play-services-maps", version.ref = "playServicesMaps" }
@@ -47,5 +54,7 @@ junit = { module = "junit:junit", version.ref = "junit" }
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+# Room DTO/entity code generation.
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 # Compose compiler plugin (required since Kotlin 2.0, replaces composeOptions.kotlinCompilerExtensionPath)
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

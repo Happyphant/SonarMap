@@ -15,9 +15,12 @@ Implemented:
 - Local audio preview via the `AudioEngine` boundary: MediaPlayer-backed
   engine (no FMOD/Resonance), SAF-picked files, volume slider wired live,
   default gain 0.7, audio focus handled, resources freed on screen exit
-- In-memory pin storage (ViewModel + Repository); Room comes later
+- Local persistence: Room (pins/routes/route points) behind the same
+  repository interfaces; foreground playback service behind an explicit
+  opt-in toggle ("Фоновый режим")
 - Real user geolocation via `LocationRepository`: FusedLocationProviderClient
-  (while-in-use, no foreground service, no background usage), runtime
+  (while-in-use; the continuous background case is the opt-in "Фоновый
+  режим" foreground service), runtime
   ACCESS_FINE/COARSE_LOCATION asked once at first screen entry (the FAB
   re-offers the dialog for a previously denied user); the user dot appears
   without any button as soon as the permission is granted; denied /
@@ -85,7 +88,7 @@ Implemented:
   button) lists routes with point count, audio file name and an active
   badge, opens the same editor per route, and offers "Новый маршрут на
   карте" which opens a draft and returns to the map. State lives in the
-  process-wide `RouteRepository` (in-memory until Room) shared by the map
+  process-wide `RouteRepository` (Room-backed) shared by the map
   and the list through `RouteViewModel` — no shared ViewModel needed.
   Domain: `Route`, `RouteSegment`, `RouteDraft`, `Route.totalLengthMeters()`.
   No map-provider routing API is called anywhere: routes are built by hand
@@ -209,6 +212,26 @@ Implemented:
   response, shrink-past cut, first-fix preview cut, GPS-gap holds (inside
   and muted) — `HearingAreaScale` mapping (tick positions, interpolation,
   round-trips, monotonicity, clamps). 145 tests green.
+  ✅ **Room persistence + «Фоновый режим» verified on device** (Galaxy
+  S24, 2026-10-31): a pin placed, audio attached (SAF) and activated —
+  screen-owned playback traced (SonarGain 0.59 at d = 27.8 m with the 70%
+  slider); enabling the toggle started the FGS (dumpsys
+  `isForeground=true types=0x0A` = location|mediaPlayback), the screen
+  engine went paused and SonarGainBg traces took over at the same gain;
+  after HOME only SonarGainBg continued (audio playing, screen loop
+  silent). The notification («Играет: Пин 1», silent low-importance,
+  Стоп action wired to the same stop path — on device the stop was
+  exercised through the toggle and the source-deactivation paths) is
+  REMOVED on stop: toggle-off → ServiceRecord count 0, empty shade, the
+  screen engine resumes seamlessly at the same gain. Silent checks:
+  reinstall with `-r` (process death) — pin + audio attach + toggle
+  survive via Room + SharedPreferences; relaunching shows «Фоновый
+  режим: вкл (нет источника)» (the active SELECTION is deliberately
+  in-session) and activating the source AUTO-STARTS the service. A
+  forced crash leaves no unattended audio and no running service
+  process (a system-restarted service would find no active source and
+  self-stop in its first emission). 153 tests green (145 + entity
+  mapping + the shared source builder).
   ✅ **Iso-contour geometry verified on device** (Galaxy S24, arc route
   near ОЦ Горностай, R = 390 m): the zone renders as a smooth union-of-
   capsules blob with a clean boundary at exactly R on the arc bend (the
@@ -231,35 +254,88 @@ Implemented:
   fits it into the adaptive-icon safe zone. The same vector serves as
   the `monochrome` layer for themed icons. Manifest wired
   (`android:icon`/`android:roundIcon`).
+- Persistence — Room (`data/db`): pins, routes and route points live in
+  SQLite (`sonarmap.db`, version 1, schema JSON exported to the committed
+  `app/schemas/`). Entities `MusicPinEntity`, `RouteEntity` +
+  normalized `RoutePointEntity` (composite PK route_id+ordinal, FK with
+  CASCADE delete, explicit FK index); DAOs return Flow (invalidation-driven
+  live updates) and are promoted to eager StateFlows in the repositories —
+  the domain interface (`MusicPinRepository`/`RouteRepository`) and its
+  contracts (clamps, blank titles, unknown-id IllegalArgumentException) are
+  unchanged; the in-memory implementations now live only as JVM test
+  fixtures. The drawing draft and the pin/route active SELECTION stay
+  in-session by design (no surprise audio on app restart; active source
+  not persisted). Migration strategy: every schema change bumps the DB
+  version + a hand-written Migration registered in
+  `SonarMapDatabase.migrations` against the committed schema exports — no
+  destructive fallback.
+- Foreground playback service ("Фоновый режим") — optional, opt-in via the
+  explicit map-screen toggle: `PlaybackForegroundService`
+  (`foregroundServiceType = location|mediaPlayback`, silent low-importance
+  notification with a Стоп action) owns the session while the app is
+  minimized: its own FusedLocation subscription, heading sensor, output
+  monitor and MediaPlayer engine, driven by the same
+  `LocationAudioController` and the same active-source builder
+  (`positionedSourceFor`) as the screen. While the service runs, IT is the
+  single engine writer — the map screen pauses its own engine. Service stop
+  paths (notification Стоп, toggle off, active source deactivated, location
+  revoked/turned off) all converge in onDestroy: location updates removed,
+  engine released, notification removed. The toggle survives process death
+  (SharedPreferences); the service restarts only when an active source
+  exists again. No ACCESS_BACKGROUND_LOCATION — see Permission notes.
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
 - Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
-  `com.yandex.android:maps.mobile` (lite), play-services-maps + maps-compose
-  (adapters only), play-services-location (location layer only)
+  Room (data layer), `com.yandex.android:maps.mobile` (lite),
+  play-services-maps + maps-compose (adapters only), play-services-location
+  (location layer only)
 
 Intentionally deferred (do not add here):
-- Foreground service / background location (updates live only while the
-  map screen is visible)
 - Walking guidance beyond the proximity gain (turn-by-turn prompts)
-- Persistence / Room (`data` package)
 
 ## Package layout
 
 ```
 com.sonarmap.app
 ├── MainActivity.kt      # Compose entry point
-├── ui/                  # Screens, navigation host
-│   └── map/             # Map screen, ViewModel, pin editor sheet
+├── ui/                  # Screens, navigation host, map screen + editors
 ├── ui.theme/            # Material 3 theme
 ├── domain/              # Models (model/), repository contract (repository/),
 │                        # geometry + gain functions (geo/, audio/) — pure Kotlin
-├── data/                # In-memory MusicPinRepository implementation
+├── data/                # Room-backed MusicPin/Route repositories (db/ holds
+│                        # entities, DAOs, the single SonarMapDatabase + mappers)
+├── service/             # PlaybackForegroundService + BackgroundModeController
+│                        # ("Фоновый режим" toggle)
 ├── map/                 # MapProvider + YandexMapProvider (default) +
 │                        # GoogleMapsProvider (optional) + MapProviders selector
 ├── audio/               # MediaPlayerAudioEngine, LocationAudioController,
-│                        # AudioOutputMonitor (headphone-class outputs)
+│                        # AudioOutputMonitor, positionedSourceFor (the shared
+│                        # active-source builder used by screen AND service)
 ├── sensor/              # HeadingSensor (rotation vector -> compass heading)
 └── location/            # Fused location provider, Kalman smoothing
 ```
+
+## Permissions, battery, privacy
+
+- `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION` — runtime, requested
+  at first map entry (rationale via snackbar states; FAB re-offers).
+  No ACCESS_BACKGROUND_LOCATION: the playback foreground service is always
+  started from the visible UI, so while-in-use authorization is sufficient
+  for the whole session — background location prompt is deliberately not
+  added for the MVP.
+- `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_LOCATION`,
+  `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, `POST_NOTIFICATIONS` — only for the
+  opt-in "Фоновый режим" service; POST_NOTIFICATIONS is runtime-requested
+  at the moment the toggle is enabled (denied → service still works, the
+  user is told the notification accessory is unavailable).
+- Battery: while-in-use location subscription (2 s / 1 s-throttled,
+  BALANCED_POWER accuracy) lives exactly while the map screen is visible
+  or, with background mode on, while the playback service runs (notification
+  Стоп / toggle off is the always-available kill switch); no service, no
+  location, no audio outside that. Location/audio cancels also happen
+  automatically on permission revoke or master location switch off.
+- Privacy: pins/routes/audio file refs are stored in the app-private
+  database only (no sync, no network upload; map tiles excepted); the
+  foreground service processes the user position on-device and discards it.
 
 ## Choosing a map provider
 

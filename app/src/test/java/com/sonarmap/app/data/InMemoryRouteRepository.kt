@@ -13,9 +13,9 @@ import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 /**
- * Thread-safe in-memory store for hand-drawn routes. Same pattern as
- * [InMemoryMusicPinRepository]: pure Kotlin/JVM, unit-testable without an
- * Android runtime; Room later replaces this class behind the interface.
+ * TEST fixture: thread-safe in-memory store for hand-drawn routes. Same
+ * pattern as [InMemoryMusicPinRepository]; production wiring is
+ * com.sonarmap.app.data.RoomRouteRepository.
  */
 class InMemoryRouteRepository : RouteRepository {
 
@@ -100,12 +100,4 @@ class InMemoryRouteRepository : RouteRepository {
     ) {
         _routes.value = _routes.value.map { if (predicate(it)) transform(it) else it }
     }
-}
-
-/**
- * Process-wide singleton so routes survive ViewModel recreation and back-stack
- * changes; process death still clears them until persistence (Room) is added.
- */
-object RouteRepositoryProvider {
-    val repository: RouteRepository = InMemoryRouteRepository()
 }

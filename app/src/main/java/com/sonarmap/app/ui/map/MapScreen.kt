@@ -7,6 +7,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -44,6 +45,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,26 +59,25 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sonarmap.app.audio.AudioOutputMonitor
 import com.sonarmap.app.audio.LocationAudioController
 import com.sonarmap.app.audio.MediaPlayerAudioEngine
-import com.sonarmap.app.audio.PositionedSourceAudio
+import com.sonarmap.app.audio.positionedSourceFor
 import com.sonarmap.app.map.audibleZonesOf
 import com.sonarmap.app.ui.common.HearingAreaRadiusSlider
 import com.sonarmap.app.domain.audio.AudioEngineListener
 import com.sonarmap.app.domain.audio.AudioErrorKind
 import com.sonarmap.app.domain.audio.AudioPlaybackState
-import com.sonarmap.app.domain.geo.bearingDegrees
-import com.sonarmap.app.domain.geo.distanceMeters
-import com.sonarmap.app.domain.geo.projection
 import com.sonarmap.app.domain.model.GeoPoint
 import com.sonarmap.app.domain.model.MusicPin
 import com.sonarmap.app.map.MapCallbacks
 import com.sonarmap.app.map.MapProviders
 import com.sonarmap.app.map.MapUiState
 import com.sonarmap.app.sensor.HeadingSensor
+import com.sonarmap.app.service.BackgroundModeController
 import com.sonarmap.app.ui.audioFileName
 import com.sonarmap.app.ui.routes.RouteEditorSheet
 import com.sonarmap.app.ui.routes.RoutePhase
 import com.sonarmap.app.ui.routes.RouteViewModel
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
 
 @Composable
 fun MapScreen(
@@ -102,6 +103,12 @@ private fun MapScreenContent(
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val routeState by routeViewModel.uiState.collectAsStateWithLifecycle()
+    // "Фоновый режим": the user toggle + whether the foreground playback
+    // service is actually alive. While it is, the SERVICE owns the audio
+    // stream and this screen defers (no second engine loop).
+    val backgroundEnabled by BackgroundModeController.enabled.collectAsStateWithLifecycle()
+    val backgroundRunning by BackgroundModeController.running.collectAsStateWithLifecycle()
+    val snackbarScope = rememberCoroutineScope()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val mapProvider = remember { MapProviders.default }
@@ -142,44 +149,21 @@ private fun MapScreenContent(
         audioOutputMonitor.start()
         onDispose { audioOutputMonitor.stop() }
     }
-    LaunchedEffect(engine, viewModel, routeViewModel) {
+    // Deferred playback: while the background service (it owns the one
+    // engine-writer role then) — the screen loop does not run at all.
+    LaunchedEffect(engine, viewModel, routeViewModel, backgroundRunning) {
+        if (backgroundRunning) return@LaunchedEffect
+        // The ONE active source (an active route first, else the active
+        // pin; the editor sheet is irrelevant to the engine).
         val activeSource = combine(
             viewModel.uiState,
             routeViewModel.uiState,
         ) { map, routes ->
-            val fix = map.userLocation
-            val route = routes.activeRoute()
-            val pin = map.activePin
-            when {
-                route != null -> {
-                    // Route sound: distance/bearing to the NEAREST POINT of
-                    // the polyline; stereo collapses to the center inside
-                    // the corridor (the bearing degenerates on the line).
-                    val source = fix?.let { route.projection(it) }
-                    PositionedSourceAudio(
-                        sourceId = route.id,
-                        distanceMeters = source?.distanceMeters,
-                        bearingDegrees = source?.let { bearingDegrees(fix, it.point) },
-                        userGain = 1.0,
-                        panFadeMeters = PositionedSourceAudio.ROUTE_PAN_FADE_METERS,
-                        audibleRadiusMeters = route.audibleRadiusMeters,
-                    )
-                }
-
-                pin != null -> {
-                    // Pin sound: distance/bearing to the pin itself. No fix
-                    // = no distance = full slider loudness, like before.
-                    PositionedSourceAudio(
-                        sourceId = pin.id,
-                        distanceMeters = fix?.let { distanceMeters(it, pin.position) },
-                        bearingDegrees = fix?.let { bearingDegrees(it, pin.position) },
-                        userGain = pin.gain,
-                        audibleRadiusMeters = pin.audibleRadiusMeters,
-                    )
-                }
-
-                else -> null // nothing active: the controller silences
-            }
+            positionedSourceFor(
+                fix = map.userLocation,
+                activeRoute = routes.activeRoute(),
+                activePin = map.activePin,
+            )
         }
         LocationAudioController(engine, trace = { Log.d("SonarGain", it) }).run(
             activePin = activeSource,
@@ -193,6 +177,8 @@ private fun MapScreenContent(
     // deactivating pauses the previous stream. The key covers the source AND
     // its file: re-picking the file restarts the prepared stream. Do not
     // touch anything here on sheet open/close — sound survives sheets.
+    // While the background service runs it owns playback; the screen pauses
+    // and resumes here on the service's death (toggle off / source loss).
     val activeAudioKey: Pair<String, String>? = when {
         routeState.activeRoute()?.audioAssetUri?.isNotBlank() == true ->
             routeState.activeRoute()!!.id to routeState.activeRoute()!!.audioAssetUri
@@ -202,7 +188,11 @@ private fun MapScreenContent(
 
         else -> null
     }
-    LaunchedEffect(activeAudioKey) {
+    LaunchedEffect(activeAudioKey, backgroundRunning) {
+        if (backgroundRunning) {
+            engine.pause() // the service plays; the screen must not double it
+            return@LaunchedEffect
+        }
         val (_, uri) = activeAudioKey ?: return@LaunchedEffect engine.pause()
         playbackError = null
         engine.prepare(uri)
@@ -291,6 +281,71 @@ private fun MapScreenContent(
     // re-launching on every ON_START would re-open the dialog (or re-fire the
     // permanently-denied snackbar) each time the user returns to the app.
     var autoAskedForLocation by rememberSaveable { mutableStateOf(false) }
+
+    // --- "Фоновый режим" toggle (foreground playback service) ------------------
+
+    // Notification visibility for the service on API 33+: runtime POST_NOTE-
+    // MENTS, requested at the point of enabling the toggle (not at startup).
+    // Denial does NOT block the feature: the service runs, the system just
+    // hides the notification (the user is told exactly what was lost).
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (!granted) {
+            snackbarScope.launch {
+                snackbarHostState.showSnackbar(
+                    "Уведомление отключено — фоновый режим будет работать, но без статуса в шторке",
+                    duration = SnackbarDuration.Short,
+                )
+            }
+        }
+        BackgroundModeController.setEnabled(context, true)
+    }
+
+    val hasActiveSource = state.activePin != null || routeState.activeRouteId != null
+
+    fun toggleBackgroundMode(enable: Boolean) {
+        when {
+            // Off — always allowed: the service stops (engine released,
+            // location updates dropped) inside its onDestroy. The screen
+            // loop + engine resume automatically (backgroundRunning -> false).
+            !enable -> BackgroundModeController.setEnabled(context, false)
+
+            // Enabling requires an audible source — otherwise the service
+            // would just instantly self-stop.
+            !hasActiveSource -> snackbarScope.launch {
+                snackbarHostState.showSnackbar(
+                    "Сначала активируйте метку или маршрут — фон играет их звук",
+                    duration = SnackbarDuration.Short,
+                )
+            }
+
+            else -> {
+                // Hand over immediately: the screen engine pauses BEFORE the
+                // service starts its own player (no overlap blip).
+                engine.pause()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.POST_NOTIFICATIONS,
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    BackgroundModeController.setEnabled(context, true)
+                }
+            }
+        }
+    }
+
+    // While the toggle is ON and an audible source exists, the service must
+    // be (re)started: covers "activated a new source after the previous one
+    // was deactivated and the service self-stopped".
+    LaunchedEffect(backgroundEnabled, backgroundRunning, hasActiveSource) {
+        if (backgroundEnabled && !backgroundRunning && hasActiveSource) {
+            BackgroundModeController.startIfEnabled(context)
+        }
+    }
 
     fun hasLocationPermission(): Boolean =
         ContextCompat.checkSelfPermission(
@@ -460,21 +515,40 @@ private fun MapScreenContent(
             }
         }
 
-        OutlinedButton(
-            onClick = onOpenRoutes,
+        Column(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(start = 16.dp, top = 48.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            val total = routeState.routes.size + routeState.pins.size
-            Text(
-                when {
-                    total == 0 -> "Маршруты и метки"
-                    routeState.pins.isEmpty() -> "Маршруты ($total)"
-                    routeState.routes.isEmpty() -> "Метки ($total)"
-                    else -> "Маршруты и метки ($total)"
-                },
-            )
+            OutlinedButton(onClick = onOpenRoutes) {
+                val total = routeState.routes.size + routeState.pins.size
+                Text(
+                    when {
+                        total == 0 -> "Маршруты и метки"
+                        routeState.pins.isEmpty() -> "Маршруты ($total)"
+                        routeState.routes.isEmpty() -> "Метки ($total)"
+                        else -> "Маршруты и метки ($total)"
+                    },
+                )
+            }
+
+            // Explicit "Фоновый режим" toggle: the ONLY control that starts
+            // or stops the foreground playback service. Label shows the live
+            // state. Requires an active source (see toggleBackgroundMode);
+            // no background location permission — while-in-use is inside
+            // the service's guarantees.
+            OutlinedButton(
+                onClick = { toggleBackgroundMode(!backgroundEnabled) },
+            ) {
+                Text(
+                    when {
+                        backgroundRunning -> "Фоновый режим: играет — выкл"
+                        backgroundEnabled -> "Фоновый режим: вкл (нет источника)"
+                        else -> "Фоновый режим: выкл"
+                    },
+                )
+            }
         }
 
         // Phase Idle entry point: start a new hand-drawn route.

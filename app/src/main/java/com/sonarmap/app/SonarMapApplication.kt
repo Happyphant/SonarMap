@@ -1,6 +1,7 @@
 package com.sonarmap.app
 
 import android.app.Application
+import com.sonarmap.app.service.BackgroundModeController
 import com.yandex.mapkit.MapKitFactory
 
 /**
@@ -9,6 +10,9 @@ import com.yandex.mapkit.MapKitFactory
  * MapKitFactory.initialize(Context) must finish before the first MapView is
  * created. Application.onCreate() guarantees the ordering: it always completes
  * before any Activity (and therefore any composition hosting a MapView).
+ * BackgroundModeController.init restores the persisted "Фоновый режим"
+ * toggle flag BEFORE any UI reads it (the service itself starts on its own
+ * schedule — only when the user activates a source).
  */
 class SonarMapApplication : Application() {
 
@@ -20,5 +24,6 @@ class SonarMapApplication : Application() {
         MapKitFactory.setLocale("ru_RU")
         MapKitFactory.setApiKey(BuildConfig.MAPKIT_API_KEY)
         MapKitFactory.initialize(this)
+        BackgroundModeController.init(this)
     }
 }
