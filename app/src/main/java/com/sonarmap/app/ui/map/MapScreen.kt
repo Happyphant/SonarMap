@@ -68,9 +68,11 @@ import com.sonarmap.app.domain.audio.AudioPlaybackState
 import com.sonarmap.app.domain.model.GeoPoint
 import com.sonarmap.app.domain.model.MusicPin
 import com.sonarmap.app.map.MapCallbacks
+import com.sonarmap.app.location.FusedHeadingSource
 import com.sonarmap.app.map.MapProviders
 import com.sonarmap.app.map.MapUiState
 import com.sonarmap.app.sensor.HeadingSensor
+import com.sonarmap.app.sensor.ScreenStateMonitor
 import com.sonarmap.app.service.BackgroundModeController
 import com.sonarmap.app.ui.audioFileName
 import com.sonarmap.app.ui.routes.RouteEditorSheet
@@ -142,6 +144,20 @@ private fun MapScreenContent(
     // minus user heading (mono-degraded without headphones or heading
     // sensor). Cancelled with the composition — no leaks, no blocking.
     val headingSensor = remember { HeadingSensor(context.applicationContext) }
+    val screenMonitor = remember(context.applicationContext) {
+        ScreenStateMonitor(context.applicationContext)
+    }
+    // Heading = GPS course while walking (the pocket-proof direction: the
+    // compass is garbage once the phone is not held in the hand), the held-
+    // phone compass while standing with the screen on, and null (pan -> the
+    // center) otherwise. See FusedHeadingSource/HeadingFusion.
+    val fusedHeading = remember {
+        FusedHeadingSource(
+            compass = headingSensor,
+            screen = screenMonitor,
+            trace = { Log.d("SonarHeading", it) },
+        )
+    }
     val audioOutputMonitor = remember(context.applicationContext) {
         AudioOutputMonitor(context.applicationContext)
     }
@@ -149,29 +165,6 @@ private fun MapScreenContent(
         audioOutputMonitor.start()
         onDispose { audioOutputMonitor.stop() }
     }
-    // Deferred playback: while the background service (it owns the one
-    // engine-writer role then) — the screen loop does not run at all.
-    LaunchedEffect(engine, viewModel, routeViewModel, backgroundRunning) {
-        if (backgroundRunning) return@LaunchedEffect
-        // The ONE active source (an active route first, else the active
-        // pin; the editor sheet is irrelevant to the engine).
-        val activeSource = combine(
-            viewModel.uiState,
-            routeViewModel.uiState,
-        ) { map, routes ->
-            positionedSourceFor(
-                fix = map.userLocation,
-                activeRoute = routes.activeRoute(),
-                activePin = map.activePin,
-            )
-        }
-        LocationAudioController(engine, trace = { Log.d("SonarGain", it) }).run(
-            activePin = activeSource,
-            heading = headingSensor.heading(),
-            headphones = audioOutputMonitor.headphonesConnected,
-        )
-    }
-
     // The active source starts playing AS SOON AS it is activated (auto-play,
     // no Прослушать button anywhere) with looped playback; switching or
     // deactivating pauses the previous stream. The key covers the source AND
@@ -197,6 +190,34 @@ private fun MapScreenContent(
         playbackError = null
         engine.prepare(uri)
         engine.play()
+    }
+
+    // Proximity loudness + stereo pan: run ONLY for an audible source and
+    // only while the screen (composition) owns playback — deferred to the
+    // background service otherwise. The gate is also the battery contract of
+    // the fused heading: with nothing audible nothing subscribes to location
+    // fixes, so the map screen never keeps the GPS warmed without a reason
+    // (the fusion rides fixes, it never spawns an extra location request of
+    // its own).
+    LaunchedEffect(activeAudioKey, backgroundRunning) {
+        if (backgroundRunning || activeAudioKey == null) return@LaunchedEffect
+        // The ONE active source (an active route first, else the active
+        // pin; the editor sheet is irrelevant to the engine).
+        val activeSource = combine(
+            viewModel.uiState,
+            routeViewModel.uiState,
+        ) { map, routes ->
+            positionedSourceFor(
+                fix = map.userLocation,
+                activeRoute = routes.activeRoute(),
+                activePin = map.activePin,
+            )
+        }
+        LocationAudioController(engine, trace = { Log.d("SonarGain", it) }).run(
+            activePin = activeSource,
+            heading = fusedHeading.heading(viewModel.locationUpdates),
+            headphones = audioOutputMonitor.headphonesConnected,
+        )
     }
 
     // One-shot hints requested from other screens (e.g. the pin placement

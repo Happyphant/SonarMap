@@ -81,12 +81,28 @@ class FusedLocationRepository(
                 val raw = UserLocation(
                     position = GeoPoint(fix.latitude, fix.longitude),
                     // Fused fix heading is unreliable without constant speed
-                    // sampling; audio bearing logic comes in a later stage.
+                    // sampling; the RAW course travels alongside the fix and
+                    // is fused (motion vs compass) in the heading layer.
                     headingDegrees = 0.0,
                     accuracyMeters = fix.accuracy.toDouble(),
                     timestamp = fix.time,
                 )
-                trySend(LocationUpdate.Fix(smoother.smooth(raw)))
+                // No bearing flag -> getBearing() returns a meaningless 0.0
+                // ("due north"), which must NOT stand in for a course;
+                // hasSpeed() is checked for symmetry even though the speed
+                // gate downstream would reject a 0.0 anyway.
+                val course = if (fix.hasBearing()) {
+                    ((fix.bearing % 360.0) + 360.0) % 360.0
+                } else {
+                    null
+                }
+                trySend(
+                    LocationUpdate.Fix(
+                        location = smoother.smooth(raw),
+                        speedMeters = if (fix.hasSpeed()) fix.speed.toDouble() else null,
+                        bearingDegrees = course,
+                    ),
+                )
             }
         }
 

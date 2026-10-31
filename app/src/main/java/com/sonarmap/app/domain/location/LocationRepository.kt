@@ -12,10 +12,20 @@ import kotlinx.coroutines.flow.Flow
 sealed interface LocationUpdate {
 
     /**
-     * A usable position fix. The payload is already smoothed by the
+     * A usable position fix. [location] is already smoothed by the
      * repository — consumers must never smooth again downstream.
+     * [speedMeters]/[bearingDegrees] are RAW pass-through of the underlying
+     * fix (NOT smoothed): the fused-heading layer needs the device's own
+     * motion direction, and smoothing a cyclic bearing through position
+     * filters would corrupt it. null = the fix carries no such field
+     * (hasBearing()/hasSpeed() false) — the fusion treats it as "no fix
+     * course this tick".
      */
-    data class Fix(val location: UserLocation) : LocationUpdate
+    data class Fix(
+        val location: UserLocation,
+        val speedMeters: Double? = null,
+        val bearingDegrees: Double? = null,
+    ) : LocationUpdate
 
     /** Tracking is on, but no satellite/clustered fix has arrived yet. */
     data object WaitingForFix : LocationUpdate

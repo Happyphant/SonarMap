@@ -28,16 +28,20 @@ import com.sonarmap.app.domain.model.MusicPin
 import com.sonarmap.app.domain.model.Route
 import com.sonarmap.app.domain.repository.MusicPinRepository
 import com.sonarmap.app.domain.repository.RouteRepository
+import com.sonarmap.app.location.FusedHeadingSource
 import com.sonarmap.app.location.FusedLocationRepository
 import com.sonarmap.app.sensor.HeadingSensor
+import com.sonarmap.app.sensor.ScreenStateMonitor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.launch
 
 /**
@@ -123,7 +127,16 @@ class PlaybackForegroundService : Service() {
             // is screen-lifecycle and this repository's smoother state is
             // per-subscription — two instances must not share it).
             val locationRepository = FusedLocationRepository(appContext)
+            // ONE subscription shared by both readers (the fix var and the
+            // fused-heading source): collecting updates() twice would run
+            // two callbacks AND two concurrent copies of the repository's
+            // Kalman smoother state. WhileSubscribed stops the upstream as
+            // this session's readers die; the idle share coroutine itself
+            // costs nothing until [serviceScope] ends.
+            val fixUpdates = locationRepository.updates()
+                .shareIn(serviceScope, SharingStarted.WhileSubscribed())
             val headingSensor = HeadingSensor(appContext)
+            val screenMonitor = ScreenStateMonitor(appContext)
             val outputMonitor = AudioOutputMonitor(appContext).also { outputMonitor = it }
             outputMonitor.start()
 
@@ -171,7 +184,7 @@ class PlaybackForegroundService : Service() {
             // (revoked permission, provider off) end the session — a
             // background mode without location has nothing to compute.
             val spatialInput = combine(
-                locationRepository.updates(),
+                fixUpdates,
                 activeSource,
             ) { update, _ ->
                 when (update) {
@@ -218,9 +231,14 @@ class PlaybackForegroundService : Service() {
             // The spatial loop: gain follows distance, pan follows
             // bearing − heading (mono-degraded without headphones).
             launch {
+                val fusedHeading = FusedHeadingSource(
+                    compass = headingSensor,
+                    screen = screenMonitor,
+                    trace = { Log.d("SonarHeadingBg", it) },
+                )
                 LocationAudioController(engine, trace = { Log.d("SonarGainBg", it) }).run(
                     activePin = spatialInput.map { it.first },
-                    heading = headingSensor.heading(),
+                    heading = fusedHeading.heading(fixUpdates),
                     headphones = outputMonitor.headphonesConnected,
                 )
             }

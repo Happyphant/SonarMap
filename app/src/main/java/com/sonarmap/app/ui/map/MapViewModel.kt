@@ -12,10 +12,12 @@ import com.sonarmap.app.domain.model.MusicPin
 import com.sonarmap.app.domain.repository.MusicPinRepository
 import com.sonarmap.app.map.MapMarkerUi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -83,6 +85,19 @@ class MapViewModel(
     /** Whether the user has asked for positioning at least once. */
     private var locationRequested = false
     private var locationJob: Job? = null
+
+    /**
+     * The raw location stream, shared to guarantee exactly ONE underlying
+     * FusedLocation subscription no matter how many readers exist. The two
+     * readers are the fix handler ([startLocationTracking] and the fused
+     * heading source the map screen feeds its audio loop; a second direct
+     * collect would launch a second provider callback AND run the
+     * repository's Kalman smoother concurrently with itself). WhileSubscribed
+     * keeps the upstream alive only while some reader collects and restarts
+     * it on demand — which preserves the start/stop-tracking semantics.
+     */
+    val locationUpdates: Flow<LocationUpdate> = locationRepository.updates()
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed())
 
     /** Set on a FAB press without a known position; consumed by the next fix. */
     private var pendingCameraFlight = false
@@ -203,7 +218,7 @@ class MapViewModel(
     fun startLocationTracking() {
         if (!locationRequested || locationJob != null) return
         locationJob = viewModelScope.launch {
-            locationRepository.updates().collect { update -> handleLocationUpdate(update) }
+            locationUpdates.collect { update -> handleLocationUpdate(update) }
         }.also { job -> job.invokeOnCompletion { if (locationJob == job) locationJob = null } }
     }
 
