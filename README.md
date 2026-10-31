@@ -222,12 +222,14 @@ Implemented:
   radius rejected), repository
   `updateAudibleRadius` round trip + clamps (test count above).
 - App icon from the reference art: adaptive launcher icon
-  (`mipmap-anydpi-v26`, minSdk 26) — lavender background
-  (`ic_launcher_background`) + a hand-drawn vector foreground
-  (`drawable/ic_launcher_foreground`): red cat-head pin with dark outline,
-  blue headphones (band + cups), closed eyes, white muzzle, pink inner
-  ears, yellow/blue music notes; the same vector serves as the
-  `monochrome` layer for themed icons. Manifest wired
+  (`mipmap-anydpi-v26`, minSdk 26) — black background
+  (`ic_launcher_background`) + a white map-pin foreground
+  (`drawable/ic_launcher_foreground`) built from the supplied reference
+  SVG: the pin's circle is a true hole (black shows through via
+  `fillType="evenOdd"`) holding an eighth note; the reference path data
+  (1254×1254) is used verbatim behind a `<group>` scale/translate that
+  fits it into the adaptive-icon safe zone. The same vector serves as
+  the `monochrome` layer for themed icons. Manifest wired
   (`android:icon`/`android:roundIcon`).
 - Domain layer: pure-Kotlin models + geometry/gain functions, unit-tested
 - Dependencies: Compose (BOM), Navigation Compose, Lifecycle, Coroutines/Flow,
