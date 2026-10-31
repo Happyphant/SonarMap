@@ -3,10 +3,11 @@
   App icon foreground from the reference SVG (the exact reference path,
   1254x1254 source): a white map pin with a hole — the black background
   shows through the circle — holding a white eighth note. The whole art
-  is scaled into the adaptive-icon safe zone: the reference pin spans
-  126..1073 vertically (center ~(625.5, 599.5)), so at scale 0.076 its
-  half-height 473.5 px fits the 36 px mask radius and the translate
-  centers it on (54, 54).
+  is scaled into the adaptive-icon safe zone with margin on all sides:
+  the reference pin spans 126..1073 vertically (center ~(625.5, 599.5)),
+  so at scale 0.06 its half-height ~28 px clears the 33 px mask radius
+  with a visible top/bottom inset, and the translate centers it on
+  (54, 54).
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -14,10 +15,10 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:scaleX="0.076"
-        android:scaleY="0.076"
-        android:translateX="6.46"
-        android:translateY="8.44">
+        android:scaleX="0.06"
+        android:scaleY="0.06"
+        android:translateX="16.47"
+        android:translateY="18.03">
         <path
             android:fillColor="#FFFFFF"
             android:fillType="evenOdd"
